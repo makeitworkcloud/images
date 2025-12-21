@@ -28,6 +28,7 @@ RUN apk add --no-cache \
     git jq yq \
     nodejs npm \
     ansible-core \
+    openssh-client \
     cdrkit \
     bash \
     binutils \
