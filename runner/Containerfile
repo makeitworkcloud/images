@@ -31,7 +31,8 @@ RUN apk add --no-cache \
     cdrkit \
     bash \
     binutils \
-    gcompat
+    gcompat \
+    make
 
 # Copy Python packages from builder
 COPY --from=builder /install /
