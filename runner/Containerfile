@@ -1,0 +1,110 @@
+# Builder stage - compile Python packages with C extensions
+FROM alpine:3.21 AS builder
+
+# hadolint ignore=DL3018
+RUN apk add --no-cache \
+    python3 py3-pip python3-dev \
+    build-base libffi-dev git
+
+# Install Python packages that need compilation
+ARG CHECKOV_VERSION=3.2.495
+ARG PRECOMMIT_VERSION=4.5.1
+RUN pip install --no-cache-dir --break-system-packages --root=/install --prefix=/usr \
+    pre-commit==${PRECOMMIT_VERSION} checkov==${CHECKOV_VERSION}
+
+# Final stage
+FROM alpine:3.21
+
+LABEL description="Alpine-based IaC runner for OpenTofu/Terraform on AMD64 architecture."
+
+# Install runtime dependencies
+# cdrkit provides genisoimage equivalent (mkisofs)
+# binutils provides strip for binary size reduction
+# gcompat provides glibc compatibility for oc binary
+# hadolint ignore=DL3018
+RUN apk add --no-cache \
+    curl unzip gnupg \
+    python3 py3-pip libffi libstdc++ \
+    git jq yq \
+    nodejs npm \
+    ansible-core \
+    cdrkit \
+    bash \
+    binutils \
+    gcompat
+
+# Copy Python packages from builder
+COPY --from=builder /install /
+
+# Tool versions
+ARG SOPS_VERSION=3.11.0
+ARG TERRAFORM_DOCS_VERSION=0.20.0
+ARG TFUPDATE_VERSION=0.9.1
+ARG HCLEDIT_VERSION=0.2.17
+
+# Install all binary tools in a single layer, strip debug symbols, clean up
+# hadolint ignore=DL3003,DL4006
+RUN set -eux; \
+    # SOPS
+    curl -Lo /usr/local/bin/sops \
+        "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"; \
+    chmod +x /usr/local/bin/sops; \
+    # OpenTofu (and symlink as terraform)
+    curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh | sh -s -- --install-method standalone; \
+    ln -s /usr/local/bin/tofu /usr/local/bin/terraform; \
+    # OpenShift CLI
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz | tar xz -C /usr/local/bin oc; \
+    chmod +x /usr/local/bin/oc; \
+    # Kustomize (script outputs to current directory)
+    cd /tmp && curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash; \
+    mv /tmp/kustomize /usr/local/bin/; \
+    # terraform-docs
+    curl -sSL "https://terraform-docs.io/dl/v${TERRAFORM_DOCS_VERSION}/terraform-docs-v${TERRAFORM_DOCS_VERSION}-linux-amd64.tar.gz" | \
+        tar xz -C /usr/local/bin terraform-docs; \
+    chmod +x /usr/local/bin/terraform-docs; \
+    # tfupdate
+    curl -sSL "https://github.com/minamijoyo/tfupdate/releases/download/v${TFUPDATE_VERSION}/tfupdate_${TFUPDATE_VERSION}_linux_amd64.tar.gz" | \
+        tar xz -C /usr/local/bin tfupdate; \
+    chmod +x /usr/local/bin/tfupdate; \
+    # hcledit
+    curl -sSL "https://github.com/minamijoyo/hcledit/releases/download/v${HCLEDIT_VERSION}/hcledit_${HCLEDIT_VERSION}_linux_amd64.tar.gz" | \
+        tar xz -C /usr/local/bin hcledit; \
+    chmod +x /usr/local/bin/hcledit; \
+    # tflint
+    curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash; \
+    # infracost
+    curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh; \
+    # Strip debug symbols from all Go/Rust binaries
+    strip /usr/local/bin/sops \
+          /usr/local/bin/tofu \
+          /usr/local/bin/oc \
+          /usr/local/bin/kustomize \
+          /usr/local/bin/terraform-docs \
+          /usr/local/bin/tfupdate \
+          /usr/local/bin/hcledit \
+          /usr/local/bin/tflint \
+          /usr/local/bin/infracost 2>/dev/null || true; \
+    # Clean up
+    rm -rf /tmp/* /var/cache/apk/*
+
+# Remove binutils (only needed for strip)
+# hadolint ignore=DL3018
+RUN apk del binutils
+
+# Configure git safe.directory globally to handle mounted workspaces
+# Set in both system and user config for maximum compatibility
+ENV HOME=/root
+RUN git config --system --add safe.directory '*' && \
+    git config --global --add safe.directory '*'
+
+# Pre-cache pre-commit hooks
+WORKDIR /pre-commit-init
+COPY pre-commit-config.yaml .pre-commit-config.yaml
+RUN git init && \
+    git config user.email "builder@localhost" && \
+    git config user.name "Builder" && \
+    pre-commit install-hooks && \
+    rm -rf /tmp/*
+
+WORKDIR /
+CMD ["/bin/bash"]

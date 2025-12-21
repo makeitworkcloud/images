@@ -1,0 +1,42 @@
+---
+name: Pull
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      matrix:
+        image:
+          - runner
+
+    steps:
+      - name: Connect to Cloudflare WARP
+        uses: Boostport/setup-cloudflare-warp@v1
+        with:
+          organization: makeitworkcloud
+          auth_client_id: ${{ secrets.CLOUDFLARE_AUTH_CLIENT_ID }}
+          auth_client_secret: ${{ secrets.CLOUDFLARE_AUTH_CLIENT_SECRET }}
+
+      - name: Install OpenShift CLI
+        uses: redhat-actions/oc-installer@v1
+
+      - name: Login to OpenShift
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ secrets.OPENSHIFT_SERVER_URL }}
+          openshift_username: ${{ secrets.OPENSHIFT_USERNAME }}
+          openshift_password: ${{ secrets.OPENSHIFT_PASSWORD }}
+          insecure_skip_tls_verify: true
+
+      - name: Import image to OpenShift
+        run: oc import-image ${{ matrix.image }} -n public-registry

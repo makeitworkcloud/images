@@ -1,0 +1,76 @@
+---
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*/Containerfile'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Image to build (leave empty for all)'
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.find.outputs.images }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find changed images
+        id: find
+        run: |
+          if [ -n "${{ inputs.image }}" ]; then
+            echo "images=[\"${{ inputs.image }}\"]" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            changed=$(git diff --name-only HEAD~1 HEAD | grep '/Containerfile' | cut -d'/' -f1 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            if [ "$changed" = "[]" ]; then
+              changed=$(find . -maxdepth 2 -name Containerfile | cut -d'/' -f2 | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            fi
+            echo "images=$changed" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.detect.outputs.images) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+
+      - name: Build image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          context: ${{ matrix.image }}
+          containerfiles: ${{ matrix.image }}/Containerfile
+          image: ${{ matrix.image }}
+          tags: latest ${{ github.sha }}
+          extra-args: --squash
+
+      - name: Push to registry
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ matrix.image }}
+          tags: latest ${{ github.sha }}
+          registry: ghcr.io/makeitworkcloud
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
