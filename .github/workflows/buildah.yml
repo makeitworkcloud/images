@@ -54,8 +54,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install hadolint
+      - name: Install dependencies
         run: |
+          apt-get update
+          apt-get install -y buildah
           curl -sSL -o /usr/local/bin/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
           chmod +x /usr/local/bin/hadolint
