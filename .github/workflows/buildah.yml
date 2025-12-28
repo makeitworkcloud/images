@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   detect:
-    runs-on: ubuntu-latest
+    runs-on: arc
     outputs:
       images: ${{ steps.find.outputs.images }}
     steps:
@@ -45,7 +45,7 @@ jobs:
   build:
     needs: detect
     if: needs.detect.outputs.images != '[]'
-    runs-on: ubuntu-latest
+    runs-on: arc-dind
     strategy:
       matrix:
         image: ${{ fromJson(needs.detect.outputs.images) }}
