@@ -34,8 +34,7 @@ jobs:
         uses: redhat-actions/oc-login@v1
         with:
           openshift_server_url: ${{ secrets.OPENSHIFT_SERVER_URL }}
-          openshift_username: ${{ secrets.OPENSHIFT_USERNAME }}
-          openshift_password: ${{ secrets.OPENSHIFT_PASSWORD }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
           insecure_skip_tls_verify: true
 
       - name: Import image to OpenShift
