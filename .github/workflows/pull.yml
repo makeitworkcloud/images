@@ -53,4 +53,4 @@ jobs:
           insecure_skip_tls_verify: true
 
       - name: Import image to OpenShift
-        run: oc import-image ${{ matrix.image }} -n public-registry --confirm
+        run: oc import-image ${{ matrix.image }}:latest --from=ghcr.io/makeitworkcloud/${{ matrix.image }}:latest -n public-registry --confirm
