@@ -6,7 +6,6 @@ on:
     branches:
       - main
     paths:
-      - '*/Containerfile'
       - '*/**'
       - '!.github/**'
   workflow_dispatch:
@@ -32,18 +31,18 @@ jobs:
 
       - name: Find changed images
         id: find
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
         run: |
-          if [ -n "${{ inputs.image }}" ]; then
+          if [ -n "$INPUT_IMAGE" ]; then
             # Specific image requested
-            echo "images=[\"${{ inputs.image }}\"]" >> "$GITHUB_OUTPUT"
+            echo "images=[\"$INPUT_IMAGE\"]" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Manual trigger without specific image: build all
-            images=$(make list-images-json)
-            echo "images=$images" >> "$GITHUB_OUTPUT"
+            echo "images=$(make list-images-json)" >> "$GITHUB_OUTPUT"
           else
             # Push event: only build changed images
-            images=$(make changed-images)
-            echo "images=$images" >> "$GITHUB_OUTPUT"
+            echo "images=$(make changed-images)" >> "$GITHUB_OUTPUT"
           fi
 
   build:
