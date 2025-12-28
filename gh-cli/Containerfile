@@ -4,14 +4,12 @@ FROM alpine:3.21
 LABEL description="Minimal Alpine image with GitHub CLI for automation tasks"
 LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
 
+# Single layer: install packages, create user, clean up
 # hadolint ignore=DL3018
-RUN apk add --no-cache \
-    github-cli \
-    bash \
-    && rm -rf /var/cache/apk/*
+RUN apk add --no-cache github-cli bash \
+    && adduser -D -u 1000 gh \
+    && rm -rf /var/cache/apk/* /tmp/* /root/.cache
 
-# Run as non-root by default
-RUN adduser -D -u 1000 gh
 USER gh
 WORKDIR /home/gh
 
