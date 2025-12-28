@@ -34,13 +34,16 @@ jobs:
         id: find
         run: |
           if [ -n "${{ inputs.image }}" ]; then
+            # Specific image requested
             echo "images=[\"${{ inputs.image }}\"]" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            changed=$(git diff --name-only HEAD~1 HEAD | grep '/Containerfile' | cut -d'/' -f1 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            if [ "$changed" = "[]" ]; then
-              changed=$(find . -maxdepth 2 -name Containerfile | cut -d'/' -f2 | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            fi
-            echo "images=$changed" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual trigger without specific image: build all
+            images=$(make list-images-json)
+            echo "images=$images" >> "$GITHUB_OUTPUT"
+          else
+            # Push event: only build changed images
+            images=$(make changed-images)
+            echo "images=$images" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -57,10 +60,11 @@ jobs:
 
       - name: Install hadolint
         run: |
-          curl -sSL -o hadolint \
+          mkdir -p $HOME/.local/bin
+          curl -sSL -o $HOME/.local/bin/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
-          chmod +x hadolint
-          sudo mv hadolint /usr/local/bin/
+          chmod +x $HOME/.local/bin/hadolint
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Setup Python
         uses: actions/setup-python@v5
