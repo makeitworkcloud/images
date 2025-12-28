@@ -49,7 +49,7 @@ jobs:
   build:
     needs: detect
     if: needs.detect.outputs.images != '[]'
-    runs-on: arc
+    runs-on: arc-dind
     strategy:
       matrix:
         image: ${{ fromJson(needs.detect.outputs.images) }}
@@ -58,8 +58,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install hadolint
+      - name: Install buildah and hadolint
         run: |
+          sudo apt-get update
+          sudo apt-get install -y buildah
           mkdir -p $HOME/.local/bin
           curl -sSL -o $HOME/.local/bin/hadolint \
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
