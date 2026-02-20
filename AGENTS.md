@@ -14,6 +14,10 @@ Agents are authorized to push directly to `main` in this repository.
 
 This is the **canonical pre-commit configuration** for all `tfroot-*` repositories in the organization. It was moved from this repo to `shared-workflows`.
 
+### tfroot-runner/pre-commit-config.yaml
+
+This is a **copy** of the canonical config from `shared-workflows`. It is used during the container build process to pre-cache hooks in the image. When the canonical config is updated, this copy must also be updated and the image rebuilt.
+
 ## CI/CD Workflows
 
 ### buildah.yml (Build)

@@ -7,7 +7,7 @@ RUN apk add --no-cache \
     build-base libffi-dev git
 
 # Install Python packages that need compilation
-ARG CHECKOV_VERSION=3.2.495
+ARG CHECKOV_VERSION=3.2.504
 ARG PRECOMMIT_VERSION=4.5.1
 RUN pip install --no-cache-dir --break-system-packages --root=/install --prefix=/usr \
     pre-commit==${PRECOMMIT_VERSION} checkov==${CHECKOV_VERSION}
@@ -40,7 +40,7 @@ COPY --from=builder /install /
 
 # Tool versions
 ARG SOPS_VERSION=3.11.0
-ARG TERRAFORM_DOCS_VERSION=0.20.0
+ARG TERRAFORM_DOCS_VERSION=0.21.0
 ARG TFUPDATE_VERSION=0.9.1
 ARG HCLEDIT_VERSION=0.2.17
 
