@@ -10,15 +10,9 @@ Agents are authorized to push directly to `main` in this repository.
 
 ## Key Files
 
-### tfroot-runner/pre-commit-config.yaml
+### tfroot-pre-commit-config.yaml (in shared-workflows)
 
-This is the **canonical pre-commit configuration** for all `tfroot-*` repositories in the organization. When modifying pre-commit hooks:
-
-1. Edit `tfroot-runner/pre-commit-config.yaml` in this repo
-2. The shared-workflows OpenTofu workflow fetches this config at CI time
-3. The tfroot-runner image pre-caches these hooks for faster CI runs
-
-**Do not** modify `.pre-commit-config.yaml` files in individual `tfroot-*` repos - they source from here.
+This is the **canonical pre-commit configuration** for all `tfroot-*` repositories in the organization. It was moved from this repo to `shared-workflows`.
 
 ## CI/CD Workflows
 
