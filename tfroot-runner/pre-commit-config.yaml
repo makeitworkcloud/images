@@ -47,3 +47,7 @@ repos:
         exclude: README.md
       - id: mixed-line-ending
       - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
