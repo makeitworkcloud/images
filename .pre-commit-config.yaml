@@ -10,6 +10,10 @@ repos:
       - id: detect-private-key
       - id: mixed-line-ending
       - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
   - repo: https://github.com/hadolint/hadolint
     rev: v2.14.0
     hooks:

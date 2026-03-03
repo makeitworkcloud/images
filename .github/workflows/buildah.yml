@@ -8,6 +8,10 @@ on:
     paths:
       - '*/**'
       - '!.github/**'
+  pull_request:
+    paths:
+      - '*/**'
+      - '!.github/**'
   workflow_dispatch:
     inputs:
       image:
@@ -85,6 +89,7 @@ jobs:
           extra-args: --squash
 
       - name: Push to registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ matrix.image }}
