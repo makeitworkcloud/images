@@ -91,7 +91,12 @@ jobs:
           extra-args: --squash
 
       - name: Push to registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # Auto-deploy when an image change pushes to main, OR run manually from
+        # the Actions pane via workflow_dispatch (which can target a specific
+        # image via the `image` input).
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          github.event_name == 'workflow_dispatch'
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ matrix.image }}
