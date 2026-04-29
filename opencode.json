@@ -1,0 +1,37 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-hub": {"type": "local", "command": ["npx", "-y", "agent-hub-mcp@latest"], "enabled": true},
+    "context-mode": {"type": "local", "command": ["context-mode"], "enabled": true},
+    "context7": {"type": "remote", "url": "https://mcp.context7.com/mcp", "enabled": true},
+    "github": {"type": "remote", "url": "https://api.githubcopilot.com/mcp/", "enabled": true, "headers": {"Authorization": "Bearer {env:GITHUB_TOKEN}"}},
+    "opencode-docs": {"enabled": false},
+    "opentofu-docs": {"enabled": false},
+    "aws-docs": {"enabled": false},
+    "kubernetes": {"enabled": false},
+    "tmux": {"enabled": false},
+    "linear": {"enabled": false},
+    "notion": {"enabled": false},
+    "aws-api-staging": {"enabled": false},
+    "aws-api-prod": {"enabled": false},
+    "grafana": {"enabled": false},
+    "terraform-docs": {"enabled": false},
+    "argocd-staging-eks": {"enabled": false},
+    "argocd-prod-eks": {"enabled": false}
+  },
+  "tools": {
+    "opencode-docs_*": false,
+    "opentofu-docs_*": false,
+    "aws-docs_*": false,
+    "kubernetes_*": false,
+    "tmux_*": false,
+    "linear_*": false,
+    "notion_*": false,
+    "aws-api-staging_*": false,
+    "aws-api-prod_*": false,
+    "grafana_*": false,
+    "terraform-docs_*": false,
+    "argocd-staging-eks_*": false,
+    "argocd-prod-eks_*": false
+  }
+}
