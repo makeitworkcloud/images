@@ -7,8 +7,8 @@ RUN apk add --no-cache \
     build-base libffi-dev git
 
 # Install Python packages that need compilation
-ARG CHECKOV_VERSION=3.2.504
-ARG PRECOMMIT_VERSION=4.5.1
+ARG CHECKOV_VERSION=3.2.525
+ARG PRECOMMIT_VERSION=4.6.0
 RUN pip install --no-cache-dir --break-system-packages --root=/install --prefix=/usr \
     pre-commit==${PRECOMMIT_VERSION} checkov==${CHECKOV_VERSION}
 
@@ -20,7 +20,6 @@ LABEL description="Alpine-based IaC runner for OpenTofu/Terraform on AMD64 archi
 # Install runtime dependencies
 # cdrkit provides genisoimage equivalent (mkisofs)
 # binutils provides strip for binary size reduction
-# gcompat provides glibc compatibility for oc binary
 # hadolint ignore=DL3018
 RUN apk add --no-cache \
     curl unzip gnupg \
@@ -32,20 +31,20 @@ RUN apk add --no-cache \
     cdrkit \
     bash \
     binutils \
-    gcompat \
     make
 
 # Copy Python packages from builder
 COPY --from=builder /install /
 
 # Tool versions
-ARG OPENTOFU_VERSION=1.11.5
-ARG SOPS_VERSION=3.11.0
-ARG TERRAFORM_DOCS_VERSION=0.21.0
-ARG TFUPDATE_VERSION=0.9.1
+ARG OPENTOFU_VERSION=1.11.6
+ARG SOPS_VERSION=3.12.2
+ARG TERRAFORM_DOCS_VERSION=0.22.0
+ARG TFUPDATE_VERSION=0.9.3
 ARG HCLEDIT_VERSION=0.2.17
-ARG TFLINT_VERSION=0.61.0
-ARG INFRACOST_VERSION=0.10.43
+ARG TFLINT_VERSION=0.62.0
+ARG INFRACOST_VERSION=0.10.44
+ARG KUBECTL_VERSION=1.36.0
 
 # Install all binary tools in a single layer, strip debug symbols, clean up
 # hadolint ignore=DL3003,DL4006
@@ -57,9 +56,9 @@ RUN set -eux; \
     # OpenTofu (and symlink as terraform)
     curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh | sh -s -- --install-method standalone --opentofu-version "${OPENTOFU_VERSION}"; \
     ln -s /usr/local/bin/tofu /usr/local/bin/terraform; \
-    # OpenShift CLI
-    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz | tar xz -C /usr/local/bin oc; \
-    chmod +x /usr/local/bin/oc; \
+    # kubectl
+    curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl; \
+    chmod +x /usr/local/bin/kubectl; \
     # Kustomize (script outputs to current directory)
     cd /tmp && curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash; \
     mv /tmp/kustomize /usr/local/bin/; \
@@ -82,7 +81,7 @@ RUN set -eux; \
     # Strip debug symbols from all Go/Rust binaries
     strip /usr/local/bin/sops \
           /usr/local/bin/tofu \
-          /usr/local/bin/oc \
+          /usr/local/bin/kubectl \
           /usr/local/bin/kustomize \
           /usr/local/bin/terraform-docs \
           /usr/local/bin/tfupdate \
