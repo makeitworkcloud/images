@@ -1,39 +1,39 @@
 # images
 
-Container image monorepo. Each subdirectory with a `Containerfile` is built and pushed to `ghcr.io/makeitworkcloud/<dir>:latest`.
+Container image monorepo. Each subdirectory containing a `Containerfile` is built and published to `ghcr.io/makeitworkcloud/<dir>:latest` (and a SHA-tagged sibling).
 
-## Structure
+## Images
 
-```
-<image-name>/
-├── Containerfile
-└── ...
-```
+| Directory | Base | Purpose |
+|---|---|---|
+| `tfroot-runner/` | `ghcr.io/actions/actions-runner` (Ubuntu) | gha-runner-scale-set runner with the OpenTofu IaC toolchain (kubectl, kustomize, sops, ansible, pre-commit, tflint, terraform-docs, infracost, checkov) |
+| `gh-cli/` | `alpine:3.21` | Minimal `gh` image for automation Jobs |
 
 ## How It Works
 
-1. Push to `main` triggers build for changed images only
-2. Images are linted with hadolint, built with buildah, pushed to GHCR
-3. After push, `pull.yml` imports images to OpenShift via Cloudflare WARP
+```
+push to main ─▶ detect changed images ─▶ pre-commit + hadolint ─▶ buildah build ─▶ push to GHCR
+```
+
+`workflow_dispatch` accepts an optional `image` input to rebuild a single image; with no input it builds all images.
+
+The detect step uses the `Makefile` (`make changed-images` / `make list-images-json`) to enumerate directories that contain a `Containerfile`.
 
 ## Adding an Image
 
 1. Create `<name>/Containerfile`
-2. Push to `main`
-3. Image publishes to `ghcr.io/makeitworkcloud/<name>:latest`
+2. Open a PR — the build runs in PR mode (no push)
+3. Merge to `main` — the image publishes to `ghcr.io/makeitworkcloud/<name>:latest` and `:<sha>`
 
-## Images
+## Canonical Pre-commit Config
 
-| Directory | Description |
-|-----------|-------------|
-| `tfroot-runner/` | Alpine-based IaC runner with OpenTofu, Checkov, pre-commit, SOPS, tflint, terraform-docs. Used by all `tfroot-*` repos. |
-| `gh-cli/` | GitHub CLI image |
+`tfroot-runner/pre-commit-config.yaml` is the **canonical pre-commit configuration** for every `tfroot-*` repository. It is:
 
-## Pre-commit Configuration
+1. Pre-cached into the runner image at build time so hooks don't re-fetch on every CI run
+2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows`
 
-The `tfroot-runner/pre-commit-config.yaml` file is the **canonical pre-commit configuration** for all `tfroot-*` repositories. This config is:
+To change pre-commit hooks across all `tfroot-*` repos, edit this file and merge to `main`.
 
-1. Bundled into the container image to pre-cache hook environments
-2. Fetched at CI time by the shared OpenTofu workflow
+## License
 
-To update pre-commit hooks for all tfroot repos, modify `tfroot-runner/pre-commit-config.yaml` and push to main.
+GPLv3

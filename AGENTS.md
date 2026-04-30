@@ -2,58 +2,64 @@
 
 ## Repository Purpose
 
-This is a container image monorepo. Each subdirectory with a `Containerfile` becomes a container image published to `ghcr.io/makeitworkcloud/<dir>:latest`.
+Container image monorepo. Every subdirectory with a `Containerfile` becomes an image at `ghcr.io/makeitworkcloud/<dir>`.
 
 ## Push Access
 
 Agents are authorized to push directly to `main` in this repository.
 
-## Key Files
+## Images
 
-### tfroot-runner/pre-commit-config.yaml
+- **`tfroot-runner/`** — gha-runner-scale-set runner image layered on `ghcr.io/actions/actions-runner`. Carries kubectl, kustomize, sops, ansible-core, openssh, pre-commit, OpenTofu, tflint, terraform-docs, infracost, checkov, hcledit, tfupdate, yq, jq.
+- **`gh-cli/`** — Alpine + `gh` for short-lived automation Jobs (e.g., the ArgoCD postsync token sync).
 
-This is the **canonical pre-commit configuration** for all `tfroot-*` repositories in the organization. When modifying pre-commit hooks:
+## Canonical Pre-commit Config
 
-1. Edit `tfroot-runner/pre-commit-config.yaml` in this repo
-2. The shared-workflows OpenTofu workflow fetches this config at CI time
-3. The tfroot-runner image pre-caches these hooks for faster CI runs
+`tfroot-runner/pre-commit-config.yaml` is the source of truth for pre-commit hooks across every `tfroot-*` repo. The runner image pre-caches its hook environments; the shared OpenTofu workflow in `shared-workflows` fetches it at CI time.
 
-**Do not** modify `.pre-commit-config.yaml` files in individual `tfroot-*` repos - they source from here.
+**Do not** edit `.pre-commit-config.yaml` files in individual `tfroot-*` repos — they pull from here.
 
-## CI/CD Workflows
+## Build Workflow (`buildah.yml`)
 
-### buildah.yml (Build)
+Single workflow, two jobs, both on `ubuntu-latest`.
 
-Builds container images and pushes to `ghcr.io/makeitworkcloud/<image>:latest`.
+1. **detect** — enumerates which images to build:
+   - `workflow_dispatch` with `image` input → just that one
+   - `workflow_dispatch` with no input → all images (`make list-images-json`)
+   - push/PR → only directories changed since the previous commit (`make changed-images`)
+2. **build** — fan-out matrix over the detected list:
+   - install buildah, podman, hadolint
+   - run pre-commit (with `SKIP=no-commit-to-branch` so the hook doesn't block CI)
+   - `redhat-actions/buildah-build@v2` with `--squash`
+   - on `push` to `main` or `workflow_dispatch`, push to GHCR with tags `latest` and `${{ github.sha }}`
 
-- Runs on `ubuntu-latest` (not self-hosted runners)
-- Triggered on push to `main` or manual dispatch
-- Manual dispatch accepts optional `image` input to build a specific image
+PRs build but do not push.
 
-**Known issues:**
-- Transient network failures can occur when downloading tools (e.g., OpenTofu installer hitting GitHub API). Re-run the workflow if you see SSL/connection errors.
+## Makefile
 
-### pull.yml (Pull)
+- `make list-images` — newline-separated list of directories with a `Containerfile`
+- `make list-images-json` — same as a JSON array
+- `make changed-images` — JSON array of directories that changed in the previous commit
 
-Imports images from GHCR to the internal OpenShift registry after successful Build.
+These targets are the contract the `detect` job depends on.
 
-- Runs on `arc` self-hosted runners (requires OpenShift connectivity)
-- Imports to `image-registry.openshift-image-registry.svc:5000/public-registry/<image>:latest`
+## Adding an Image
 
-**Known issues:**
-- The `|| true` at the end of the import command masks failures. Always verify import succeeded by checking logs for actual image metadata output (not "Unable to connect" errors).
-- If import fails, re-run the Pull workflow or manually run: `oc import-image <image>:latest --from=ghcr.io/makeitworkcloud/<image>:latest -n public-registry --confirm --reference-policy=local`
+1. `mkdir <name>` and add a `Containerfile`
+2. Open a PR — confirm the build matrix picks up the new directory
+3. Merge — image publishes at `ghcr.io/makeitworkcloud/<name>:latest`
 
-## Renaming Images
+## Image Pull Pattern
 
-When renaming an image (e.g., `runner` → `tfroot-runner`):
+Workloads pull directly from `ghcr.io/makeitworkcloud/<image>:latest` (or `:<sha>` for pinned references). The k3s nodes have anonymous pull access to public GHCR packages; private packages need a pull secret in the consuming namespace.
 
-1. Rename the directory in this repo
-2. Update all references in `shared-workflows` and consumer repos
-3. After successful build, verify Pull workflow imports to OpenShift
-4. Manually delete the old package from GHCR (requires `delete:packages` scope): https://github.com/orgs/makeitworkcloud/packages
+## Known Issues
+
+- Transient SSL/network failures while downloading toolchain binaries (OpenTofu, hadolint) can break the build. Re-run the workflow.
+- `--squash` on the buildah build means each image is one big layer — fine for our scale, but expect full rebuilds when any layer-affecting input changes.
 
 ## Related Repositories
 
-- `shared-workflows` - Contains reusable GitHub Actions workflows that reference the tfroot-runner image
-- `tfroot-cloudflare`, `tfroot-libvirt`, `tfroot-github`, `tfroot-aws` - Terraform root module repos that use the tfroot-runner image via shared-workflows
+- `shared-workflows` — reusable GitHub Actions workflows that consume the `tfroot-runner` image
+- `tfroot-aws`, `tfroot-cloudflare`, `tfroot-github`, `tfroot-libvirt` — IaC roots that run on the `tfroot-runner` image via `shared-workflows`
+- `kustomize-cluster` — runs `gh-cli` in a postsync Job to sync the cluster SA token to GitHub Actions secrets
