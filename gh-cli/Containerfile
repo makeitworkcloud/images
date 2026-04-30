@@ -10,7 +10,7 @@ RUN apk add --no-cache github-cli bash \
     && adduser -D -u 1000 gh \
     && rm -rf /var/cache/apk/* /tmp/* /root/.cache
 
-USER gh
+USER 1000
 WORKDIR /home/gh
 
 ENTRYPOINT ["/bin/bash"]
