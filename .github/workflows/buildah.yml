@@ -1,5 +1,5 @@
 ---
-name: Build
+name: buildah
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'buildah'
+        description: 'Run mode'
         type: choice
         options:
           - build & push
