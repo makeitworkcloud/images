@@ -14,6 +14,13 @@ on:
       - '!.github/**'
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'buildah'
+        type: choice
+        options:
+          - build & push
+          - build
+        default: build & push
       image:
         description: 'Image to build (leave empty for all)'
         required: false
@@ -50,6 +57,7 @@ jobs:
           fi
 
   build:
+    name: ${{ inputs.mode || 'build & push' }}
     needs: detect
     if: needs.detect.outputs.images != '[]'
     runs-on: ubuntu-latest
@@ -91,12 +99,11 @@ jobs:
           extra-args: --squash
 
       - name: Push to registry
-        # Auto-deploy when an image change pushes to main, OR run manually from
-        # the Actions pane via workflow_dispatch (which can target a specific
-        # image via the `image` input).
+        # Auto-deploy on push to main; for workflow_dispatch the user picks
+        # "build & push" to publish or "build" to dry-run.
         if: |
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-          github.event_name == 'workflow_dispatch'
+          (github.event_name == 'workflow_dispatch' && inputs.mode == 'build & push')
         uses: redhat-actions/push-to-registry@v2
         with:
           image: ${{ matrix.image }}
