@@ -2,11 +2,14 @@
 
 ## Repository Purpose
 
-Container image monorepo. Every subdirectory with a `Containerfile` becomes an image at `ghcr.io/makeitworkcloud/<dir>`.
+Container image monorepo. Every direct child directory with a `Containerfile` becomes an image at `ghcr.io/makeitworkcloud/<dir>`.
 
-## Push Access
+## Change Workflow
 
-Agents are authorized to push directly to `main` in this repository.
+Work on a branch and open a PR; do not push directly to `main` or push any
+branch unless explicitly requested. A successful push to `main` publishes
+affected images to GHCR with `latest` and commit SHA tags, so treat merges as
+production publication.
 
 ## Images
 
@@ -31,9 +34,9 @@ Single workflow, two jobs, both on `ubuntu-latest`.
    - install buildah, podman, hadolint
    - run pre-commit (with `SKIP=no-commit-to-branch` so the hook doesn't block CI)
    - `redhat-actions/buildah-build@v2` with `--squash`
-   - on `push` to `main` or `workflow_dispatch`, push to GHCR with tags `latest` and `${{ github.sha }}`
+   - on `push` to `main`, or `workflow_dispatch` with `mode=build & push`, push to GHCR with tags `latest` and `${{ github.sha }}`
 
-PRs build but do not push.
+PRs and `workflow_dispatch` with `mode=build` build but do not push.
 
 ## Makefile
 
