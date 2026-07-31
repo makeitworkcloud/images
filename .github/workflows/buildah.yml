@@ -5,13 +5,7 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '*/**'
-      - '!.github/**'
   pull_request:
-    paths:
-      - '*/**'
-      - '!.github/**'
   workflow_dispatch:
     inputs:
       mode:
@@ -27,9 +21,32 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install hadolint
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL -o "$HOME/.local/bin/hadolint" \
+            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
+          chmod +x "$HOME/.local/bin/hadolint"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+        env:
+          SKIP: no-commit-to-branch
+
   detect:
     runs-on: ubuntu-latest
     outputs:
@@ -58,7 +75,10 @@ jobs:
 
   build:
     name: ${{ inputs.mode || 'build & push' }}
-    needs: detect
+    permissions:
+      contents: read
+      packages: write
+    needs: [checks, detect]
     if: needs.detect.outputs.images != '[]'
     runs-on: ubuntu-latest
     strategy:
@@ -69,25 +89,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install buildah, podman, and hadolint
+      - name: Install buildah and podman
         run: |
           sudo apt-get update
           sudo apt-get install -y buildah podman
-          mkdir -p $HOME/.local/bin
-          curl -sSL -o $HOME/.local/bin/hadolint \
-            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
-          chmod +x $HOME/.local/bin/hadolint
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
-        env:
-          SKIP: no-commit-to-branch
 
       - name: Build image
         uses: redhat-actions/buildah-build@v2

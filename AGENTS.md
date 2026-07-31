@@ -18,21 +18,23 @@ production publication.
 
 ## Canonical Pre-commit Config
 
-`tfroot-runner/pre-commit-config.yaml` is the source of truth for pre-commit hooks across every `tfroot-*` repo. The runner image pre-caches its hook environments; the shared OpenTofu workflow in `shared-workflows` fetches it at CI time.
+`tfroot-runner/pre-commit-config.yaml` is the source of truth for pre-commit hooks across every `tfroot-*` repo. The runner image pre-caches its hook environments; the shared OpenTofu workflow in `shared-workflows` fetches it at CI time. Secret scanning uses Gitleaks alongside `detect-private-key`.
 
 **Do not** edit `.pre-commit-config.yaml` files in individual `tfroot-*` repos — they pull from here.
 
 ## Build Workflow (`buildah.yml`)
 
-Single workflow, two jobs, both on `ubuntu-latest`.
+Single workflow, three jobs, all on `ubuntu-latest`.
 
-1. **detect** — enumerates which images to build:
+1. **checks** — runs pre-commit, including full-tree Gitleaks scanning,
+   hadolint, and actionlint, for every `main` push, pull request, and manual
+   dispatch.
+2. **detect** — enumerates which images to build:
    - `workflow_dispatch` with `image` input → just that one
    - `workflow_dispatch` with no input → all images (`make list-images-json`)
    - push/PR → only directories changed since the previous commit (`make changed-images`)
-2. **build** — fan-out matrix over the detected list:
-   - install buildah, podman, hadolint
-   - run pre-commit (with `SKIP=no-commit-to-branch` so the hook doesn't block CI)
+3. **build** — after checks pass, fan out over the detected image matrix:
+   - install buildah and podman
    - `redhat-actions/buildah-build@v2` with `--squash`
    - on `push` to `main`, or `workflow_dispatch` with `mode=build & push`, push to GHCR with tags `latest` and `${{ github.sha }}`
 
