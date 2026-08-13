@@ -35,7 +35,7 @@ Single workflow, three jobs, all on `ubuntu-latest`.
    - push/PR → only directories changed since the previous commit (`make changed-images`)
 3. **build** — after checks pass, fan out over the detected image matrix:
    - install buildah and podman
-   - `redhat-actions/buildah-build@v2` with `--squash`
+   - `redhat-actions/buildah-build@v3` with `--squash`
    - on `push` to `main`, or `workflow_dispatch` with `mode=build & push`, push to GHCR with tags `latest` and `${{ github.sha }}`
 
 PRs and `workflow_dispatch` with `mode=build` build but do not push.
