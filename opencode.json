@@ -16,6 +16,7 @@
     "aws-prod": {"enabled": false},
     "grafana": {"enabled": false},
     "terraform-docs": {"enabled": false},
+    "argocd-makeitwork": {"enabled": true},
     "argocd-staging-eks": {"enabled": false},
     "argocd-prod-eks": {"enabled": false}
   },
@@ -31,6 +32,7 @@
     "aws-prod_*": false,
     "grafana_*": false,
     "terraform-docs_*": false,
+    "argocd-makeitwork_*": true,
     "argocd-staging-eks_*": false,
     "argocd-prod-eks_*": false
   }
