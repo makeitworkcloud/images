@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install hadolint
         run: |
@@ -38,12 +38,12 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         env:
           SKIP: no-commit-to-branch
 
@@ -53,7 +53,7 @@ jobs:
       images: ${{ steps.find.outputs.images }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
@@ -63,13 +63,10 @@ jobs:
           INPUT_IMAGE: ${{ inputs.image }}
         run: |
           if [ -n "$INPUT_IMAGE" ]; then
-            # Specific image requested
             echo "images=[\"$INPUT_IMAGE\"]" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual trigger without specific image: build all
             echo "images=$(make list-images-json)" >> "$GITHUB_OUTPUT"
           else
-            # Push event: only build changed images
             echo "images=$(make changed-images)" >> "$GITHUB_OUTPUT"
           fi
 
@@ -87,7 +84,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install buildah and podman
         run: |
@@ -95,7 +92,7 @@ jobs:
           sudo apt-get install -y buildah podman
 
       - name: Build image
-        uses: redhat-actions/buildah-build@v3
+        uses: redhat-actions/buildah-build@3a51aade9afa17e5c78256bcbe2e1ee08c7b995b # v3.0.2
         with:
           context: ${{ matrix.image }}
           containerfiles: ${{ matrix.image }}/Containerfile
@@ -109,7 +106,7 @@ jobs:
         if: |
           (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
           (github.event_name == 'workflow_dispatch' && inputs.mode == 'build & push')
-        uses: redhat-actions/push-to-registry@v3
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         with:
           image: ${{ matrix.image }}
           tags: latest ${{ github.sha }}

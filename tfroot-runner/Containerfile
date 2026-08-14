@@ -1,14 +1,7 @@
-# tfroot-runner — GitHub ARC runner image preloaded with the OpenTofu IaC
-# toolchain. Self-registers with the gha-runner-scale-set listener; jobs run
-# directly in the pod (no nested `container:` block).
-#
 # Layout follows the hatch1fy/infra-images/terraform-runner pattern:
 #   Stage 1 (tools)  — Ubuntu builder for binary downloads + Python venv
 #   Stage 2 (final)  — ghcr.io/actions/actions-runner base + runtime deps
 
-##############################
-# Pinned versions — update here
-##############################
 ARG OPENTOFU_VERSION=1.12.5
 ARG SOPS_VERSION=3.13.3
 ARG TERRAFORM_DOCS_VERSION=0.24.0
@@ -24,9 +17,6 @@ ARG PYTHON_VERSION=3.14
 ARG YQ_VERSION=4.53.3
 ARG ACTIONS_RUNNER_VERSION=2.336.0
 
-##############################
-# Stage 1: Build/download tools
-##############################
 FROM --platform=linux/amd64 ubuntu:24.04 AS tools
 
 ARG OPENTOFU_VERSION
@@ -44,7 +34,6 @@ ARG PYTHON_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build-time dependencies (Python + add-apt-repository)
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg lsb-release software-properties-common unzip \
@@ -54,42 +43,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential libffi-dev git \
     && rm -rf /var/lib/apt/lists/*
 
-# Python venv with the pip-managed tools.
 RUN python${PYTHON_VERSION} -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir \
         pre-commit==${PRECOMMIT_VERSION} \
         checkov==${CHECKOV_VERSION}
 
-# Binary downloads — single layer, strip debug symbols at the end.
 # hadolint ignore=DL3003,DL4006
 RUN set -eux; \
-    # OpenTofu
     curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh \
         | sh -s -- --install-method standalone --opentofu-version "${OPENTOFU_VERSION}"; \
     # Symlink as terraform for tooling that hardcodes that name.
     ln -s /usr/local/bin/tofu /usr/local/bin/terraform; \
-    # SOPS
     curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
         -o /usr/local/bin/sops && chmod +x /usr/local/bin/sops; \
-    # kubectl
     curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
         -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl; \
-    # kustomize
     curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
         | tar xz -C /usr/local/bin kustomize; \
-    # terraform-docs
     curl -fsSL "https://terraform-docs.io/dl/v${TERRAFORM_DOCS_VERSION}/terraform-docs-v${TERRAFORM_DOCS_VERSION}-linux-amd64.tar.gz" \
         | tar xz -C /usr/local/bin terraform-docs && chmod +x /usr/local/bin/terraform-docs; \
-    # tfupdate
     curl -fsSL "https://github.com/minamijoyo/tfupdate/releases/download/v${TFUPDATE_VERSION}/tfupdate_${TFUPDATE_VERSION}_linux_amd64.tar.gz" \
         | tar xz -C /usr/local/bin tfupdate && chmod +x /usr/local/bin/tfupdate; \
-    # hcledit
     curl -fsSL "https://github.com/minamijoyo/hcledit/releases/download/v${HCLEDIT_VERSION}/hcledit_${HCLEDIT_VERSION}_linux_amd64.tar.gz" \
         | tar xz -C /usr/local/bin hcledit && chmod +x /usr/local/bin/hcledit; \
-    # tflint
     curl -fsSL "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_amd64.zip" \
         -o /tmp/tflint.zip && unzip /tmp/tflint.zip -d /usr/local/bin/ && rm -f /tmp/tflint.zip; \
-    # infracost
     curl -fsSL "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-amd64.tar.gz" \
         | tar xz -C /tmp && mv /tmp/infracost-linux-amd64 /usr/local/bin/infracost && chmod +x /usr/local/bin/infracost; \
     strip /usr/local/bin/tofu \
@@ -102,9 +80,6 @@ RUN set -eux; \
           /usr/local/bin/tflint \
           /usr/local/bin/infracost 2>/dev/null || true
 
-##############################
-# Stage 2: Final runner image
-##############################
 FROM --platform=linux/amd64 ghcr.io/actions/actions-runner:${ACTIONS_RUNNER_VERSION}
 
 ARG PYTHON_VERSION
@@ -118,8 +93,6 @@ USER root
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Runtime dependencies: Python (no -dev), ansible, openssh-client, jq/yq,
-# genisoimage (cdrkit equivalent), gnupg, make, shellcheck, libatomic1.
 # libatomic1 is needed by the Node.js binary pre-commit downloads for some hooks.
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -135,7 +108,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
 
-# Copy pre-built tools and the Python venv from the builder stage.
 COPY --from=tools /usr/local/bin/tofu /usr/local/bin/tofu
 COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=tools /usr/local/bin/sops /usr/local/bin/sops
