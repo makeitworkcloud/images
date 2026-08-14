@@ -1,5 +1,5 @@
 # Minimal GitHub CLI image for automation tasks
-FROM alpine:3.21
+FROM alpine:3.24
 
 LABEL description="Minimal Alpine image with GitHub CLI for automation tasks"
 LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
