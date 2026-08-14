@@ -15,7 +15,7 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 push to main ─▶ detect changed images ─▶ pre-commit + hadolint ─▶ buildah build ─▶ push to GHCR
 ```
 
-`workflow_dispatch` accepts an optional `image` input to rebuild a single image; with no input it builds all images.
+`workflow_dispatch` accepts an optional `image` input to rebuild a single image; with no input it builds all images. Manual dispatch defaults to **build & push**; select **build** for a non-publishing validation run.
 
 The detect step uses the `Makefile` (`make changed-images` / `make list-images-json`) to enumerate directories that contain a `Containerfile`.
 
@@ -27,12 +27,12 @@ The detect step uses the `Makefile` (`make changed-images` / `make list-images-j
 
 ## Canonical Pre-commit Config
 
-`tfroot-runner/pre-commit-config.yaml` is the **canonical pre-commit configuration** for every `tfroot-*` repository. It is:
+`tfroot-runner/pre-commit-config.yaml` is the **canonical pre-commit configuration** for every `tfroot-*` repository and `terraform-libvirt-domain`. It is:
 
 1. Pre-cached into the runner image at build time so hooks don't re-fetch on every CI run
 2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows`
 
-To change pre-commit hooks across all `tfroot-*` repos, edit this file and merge to `main`.
+To change these hooks, edit this file and merge it first. Downstream `make test` runs refresh the ignored generated configuration from this source.
 
 ## License
 

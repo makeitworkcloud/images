@@ -18,9 +18,9 @@ production publication.
 
 ## Canonical Pre-commit Config
 
-`tfroot-runner/pre-commit-config.yaml` is the source of truth for pre-commit hooks across every `tfroot-*` repo. The runner image pre-caches its hook environments; the shared OpenTofu workflow in `shared-workflows` fetches it at CI time. Secret scanning uses Gitleaks alongside `detect-private-key`.
+`tfroot-runner/pre-commit-config.yaml` is the source of truth for pre-commit hooks across every `tfroot-*` repo and `terraform-libvirt-domain`. The runner image pre-caches its hook environments; the shared OpenTofu workflow in `shared-workflows` fetches it at CI time. Secret scanning uses Gitleaks alongside `detect-private-key`.
 
-**Do not** edit `.pre-commit-config.yaml` files in individual `tfroot-*` repos — they pull from here.
+**Do not** edit `.pre-commit-config.yaml` files in individual `tfroot-*` repos or the generated module config — they pull from here. Merge runner/toolchain updates and verify image publication before merging shared-workflow changes that require the new runner runtime.
 
 ## Build Workflow (`buildah.yml`)
 
