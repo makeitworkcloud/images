@@ -1,0 +1,15 @@
+---
+# Managed by tfroot-github (gh-dependabot.tf); local edits are overwritten.
+name: dependabot-notify
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  notify:
+    if: github.actor == 'dependabot[bot]'
+    uses: makeitworkcloud/shared-workflows/.github/workflows/dependabot-notify.yml@main
+    secrets: inherit
