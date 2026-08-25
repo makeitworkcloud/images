@@ -1,0 +1,115 @@
+---
+name: buildah
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        type: choice
+        options:
+          - build & push
+          - build
+        default: build & push
+      image:
+        description: 'Image to build (leave empty for all)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install hadolint
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL -o "$HOME/.local/bin/hadolint" \
+            https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64
+          chmod +x "$HOME/.local/bin/hadolint"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Run pre-commit
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        env:
+          SKIP: no-commit-to-branch
+
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.find.outputs.images }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Find changed images
+        id: find
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+        run: |
+          if [ -n "$INPUT_IMAGE" ]; then
+            echo "images=[\"$INPUT_IMAGE\"]" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "images=$(make list-images-json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "images=$(make changed-images)" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: ${{ inputs.mode || 'build & push' }}
+    permissions:
+      contents: read
+      packages: write
+    needs: [checks, detect]
+    if: needs.detect.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.detect.outputs.images) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install buildah and podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y buildah podman
+
+      - name: Build image
+        uses: redhat-actions/buildah-build@3a51aade9afa17e5c78256bcbe2e1ee08c7b995b # v3.0.2
+        with:
+          context: ${{ matrix.image }}
+          containerfiles: ${{ matrix.image }}/Containerfile
+          image: ${{ matrix.image }}
+          tags: latest ${{ github.sha }}
+          extra-args: --squash
+
+      - name: Push to registry
+        # Auto-deploy on push to main; for workflow_dispatch the user picks
+        # "build & push" to publish or "build" to dry-run.
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && inputs.mode == 'build & push')
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
+        with:
+          image: ${{ matrix.image }}
+          tags: latest ${{ github.sha }}
+          registry: ghcr.io/makeitworkcloud
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}

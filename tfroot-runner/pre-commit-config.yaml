@@ -1,0 +1,59 @@
+# Canonical pre-commit configuration for tfroot-* repositories.
+# This file is bundled into the tfroot-runner container image to pre-cache hooks.
+# It is also fetched by the shared OpenTofu workflow at CI time.
+#
+# To update hooks for all tfroot repos, modify this file and rebuild the image.
+repos:
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 91ab4bf57e58b32adf1a122681f6ebe164d081c8 # v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: bf9dd9c695ddaf238af36f179049202358ec22b7 # v1.108.1
+    hooks:
+      - id: terraform_validate
+        args:
+          - --hook-config=--retry-once-with-cleanup=true
+          - --args=-no-color
+          - --tf-init-args=-reconfigure
+          - --tf-init-args=-upgrade
+          - --tf-init-args=-backend=false
+      - id: terraform_tflint
+        args:
+          - --args=--minimum-failure-severity=error
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
+      - id: terraform_checkov
+        args:
+          - --args=--config-file __GIT_WORKING_DIR__/.checkov.yml
+      - id: terraform_fmt
+        args:
+          - --args=-no-color
+          - --args=-diff
+          - --args=-recursive
+      - id: terraform_docs
+        args:
+          - --args=--config=.terraform-docs.yml
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1
+    hooks:
+      - id: gitleaks
+        entry: gitleaks dir --redact --verbose .
+        pass_filenames: false
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-vcs-permalinks
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: README.md
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: ['--branch', 'main']
+      - id: check-added-large-files
+        args: ['--maxkb=1000']

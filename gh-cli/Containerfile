@@ -1,0 +1,14 @@
+FROM alpine:3.24
+
+LABEL description="Minimal Alpine image with GitHub CLI for automation tasks"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+# hadolint ignore=DL3018
+RUN apk add --no-cache github-cli bash \
+    && adduser -D -u 1000 gh \
+    && rm -rf /var/cache/apk/* /tmp/* /root/.cache
+
+USER 1000
+WORKDIR /home/gh
+
+ENTRYPOINT ["/bin/bash"]

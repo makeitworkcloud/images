@@ -1,0 +1,144 @@
+# Layout follows the hatch1fy/infra-images/terraform-runner pattern:
+#   Stage 1 (tools)  — Ubuntu builder for binary downloads + Python venv
+#   Stage 2 (final)  — ghcr.io/actions/actions-runner base + runtime deps
+
+ARG OPENTOFU_VERSION=1.12.5
+ARG SOPS_VERSION=3.13.3
+ARG TERRAFORM_DOCS_VERSION=0.24.0
+ARG TFUPDATE_VERSION=0.10.2
+ARG HCLEDIT_VERSION=0.2.18
+ARG TFLINT_VERSION=0.64.0
+ARG INFRACOST_VERSION=0.10.45
+ARG KUBECTL_VERSION=1.36.3
+ARG KUSTOMIZE_VERSION=5.8.1
+ARG CHECKOV_VERSION=3.3.11
+ARG PRECOMMIT_VERSION=4.6.2
+ARG PYTHON_VERSION=3.14
+ARG YQ_VERSION=4.53.3
+ARG ACTIONS_RUNNER_VERSION=2.336.0
+
+FROM --platform=linux/amd64 ubuntu:26.04 AS tools
+
+ARG OPENTOFU_VERSION
+ARG SOPS_VERSION
+ARG TERRAFORM_DOCS_VERSION
+ARG TFUPDATE_VERSION
+ARG HCLEDIT_VERSION
+ARG TFLINT_VERSION
+ARG INFRACOST_VERSION
+ARG KUBECTL_VERSION
+ARG KUSTOMIZE_VERSION
+ARG CHECKOV_VERSION
+ARG PRECOMMIT_VERSION
+ARG PYTHON_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release software-properties-common unzip \
+    && (apt-cache show python${PYTHON_VERSION} > /dev/null 2>&1 \
+        || (add-apt-repository -y ppa:deadsnakes/ppa && apt-get update)) \
+    && apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
+        build-essential libffi-dev git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python${PYTHON_VERSION} -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir \
+        pre-commit==${PRECOMMIT_VERSION} \
+        checkov==${CHECKOV_VERSION}
+
+# hadolint ignore=DL3003,DL4006
+RUN set -eux; \
+    curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh \
+        | sh -s -- --install-method standalone --opentofu-version "${OPENTOFU_VERSION}"; \
+    # Symlink as terraform for tooling that hardcodes that name.
+    ln -s /usr/local/bin/tofu /usr/local/bin/terraform; \
+    curl -fsSL "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
+        -o /usr/local/bin/sops && chmod +x /usr/local/bin/sops; \
+    curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+        -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl; \
+    curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+        | tar xz -C /usr/local/bin kustomize; \
+    curl -fsSL "https://terraform-docs.io/dl/v${TERRAFORM_DOCS_VERSION}/terraform-docs-v${TERRAFORM_DOCS_VERSION}-linux-amd64.tar.gz" \
+        | tar xz -C /usr/local/bin terraform-docs && chmod +x /usr/local/bin/terraform-docs; \
+    curl -fsSL "https://github.com/minamijoyo/tfupdate/releases/download/v${TFUPDATE_VERSION}/tfupdate_${TFUPDATE_VERSION}_linux_amd64.tar.gz" \
+        | tar xz -C /usr/local/bin tfupdate && chmod +x /usr/local/bin/tfupdate; \
+    curl -fsSL "https://github.com/minamijoyo/hcledit/releases/download/v${HCLEDIT_VERSION}/hcledit_${HCLEDIT_VERSION}_linux_amd64.tar.gz" \
+        | tar xz -C /usr/local/bin hcledit && chmod +x /usr/local/bin/hcledit; \
+    curl -fsSL "https://github.com/terraform-linters/tflint/releases/download/v${TFLINT_VERSION}/tflint_linux_amd64.zip" \
+        -o /tmp/tflint.zip && unzip /tmp/tflint.zip -d /usr/local/bin/ && rm -f /tmp/tflint.zip; \
+    curl -fsSL "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-amd64.tar.gz" \
+        | tar xz -C /tmp && mv /tmp/infracost-linux-amd64 /usr/local/bin/infracost && chmod +x /usr/local/bin/infracost; \
+    strip /usr/local/bin/tofu \
+          /usr/local/bin/sops \
+          /usr/local/bin/kubectl \
+          /usr/local/bin/kustomize \
+          /usr/local/bin/terraform-docs \
+          /usr/local/bin/tfupdate \
+          /usr/local/bin/hcledit \
+          /usr/local/bin/tflint \
+          /usr/local/bin/infracost 2>/dev/null || true
+
+FROM --platform=linux/amd64 ghcr.io/actions/actions-runner:${ACTIONS_RUNNER_VERSION}
+
+ARG PYTHON_VERSION
+ARG YQ_VERSION
+
+LABEL org.opencontainers.image.title="tfroot-runner" \
+      org.opencontainers.image.description="GitHub ARC runner with OpenTofu, kubectl, kustomize, sops, ansible, pre-commit, and friends." \
+      org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# libatomic1 is needed by the Node.js binary pre-commit downloads for some hooks.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl unzip software-properties-common \
+    && (apt-cache show python${PYTHON_VERSION} > /dev/null 2>&1 \
+        || (add-apt-repository -y ppa:deadsnakes/ppa && apt-get update)) \
+    && apt-get install -y --no-install-recommends \
+        python${PYTHON_VERSION} python${PYTHON_VERSION}-venv \
+        ansible-core openssh-client \
+        jq genisoimage gnupg make shellcheck libatomic1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
+    && curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" \
+        -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/*
+
+COPY --from=tools /usr/local/bin/tofu /usr/local/bin/tofu
+COPY --from=tools /usr/local/bin/terraform /usr/local/bin/terraform
+COPY --from=tools /usr/local/bin/sops /usr/local/bin/sops
+COPY --from=tools /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=tools /usr/local/bin/kustomize /usr/local/bin/kustomize
+COPY --from=tools /usr/local/bin/terraform-docs /usr/local/bin/terraform-docs
+COPY --from=tools /usr/local/bin/tfupdate /usr/local/bin/tfupdate
+COPY --from=tools /usr/local/bin/hcledit /usr/local/bin/hcledit
+COPY --from=tools /usr/local/bin/tflint /usr/local/bin/tflint
+COPY --from=tools /usr/local/bin/infracost /usr/local/bin/infracost
+COPY --from=tools /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# git safe.directory for mounted _work volumes — system-wide covers all users.
+RUN git config --system --add safe.directory '*'
+
+# Pre-cache pre-commit hook environments under the runner user so the cache
+# is owned correctly at runtime.
+COPY --chown=runner:runner pre-commit-config.yaml /home/runner/.pre-commit-default-config.yaml
+
+USER runner
+
+RUN cd /home/runner \
+    && git init pre-commit-cache \
+    && cd pre-commit-cache \
+    && git config user.email "builder@localhost" \
+    && git config user.name "Builder" \
+    && cp /home/runner/.pre-commit-default-config.yaml .pre-commit-config.yaml \
+    && pre-commit install-hooks \
+    && cd /home/runner \
+    && rm -rf pre-commit-cache
