@@ -7,7 +7,7 @@
       - "*"
   "package-ecosystem": "github-actions"
   "schedule":
-    "interval": "weekly"
+    "interval": "daily"
 - "directory": "/gh-cli"
   "groups":
     "docker":
@@ -15,7 +15,7 @@
       - "*"
   "package-ecosystem": "docker"
   "schedule":
-    "interval": "weekly"
+    "interval": "daily"
 - "directory": "/tfroot-runner"
   "groups":
     "docker":
@@ -23,5 +23,5 @@
       - "*"
   "package-ecosystem": "docker"
   "schedule":
-    "interval": "weekly"
+    "interval": "daily"
 "version": 2
