@@ -37,8 +37,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg lsb-release software-properties-common unzip \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && (apt-cache show python${PYTHON_VERSION} > /dev/null 2>&1 \
+        || (add-apt-repository -y ppa:deadsnakes/ppa && apt-get update)) \
+    && apt-get install -y --no-install-recommends \
         python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev \
         build-essential libffi-dev git \
     && rm -rf /var/lib/apt/lists/*
@@ -97,8 +98,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip software-properties-common \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && (apt-cache show python${PYTHON_VERSION} > /dev/null 2>&1 \
+        || (add-apt-repository -y ppa:deadsnakes/ppa && apt-get update)) \
+    && apt-get install -y --no-install-recommends \
         python${PYTHON_VERSION} python${PYTHON_VERSION}-venv \
         ansible-core openssh-client \
         jq genisoimage gnupg make shellcheck libatomic1 \
