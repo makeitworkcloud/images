@@ -1,0 +1,25 @@
+# Keep the readable tag alongside its immutable multi-platform manifest digest.
+# Dependabot manages Docker base-image updates for this directory.
+FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+LABEL org.opencontainers.image.description="Policy-gated SSH Model Context Protocol server"
+
+ARG SSH_MCP_VERSION=2.5.0
+
+# Install exactly the reviewed npm release at build time; never download code
+# when the pod starts. ssh-mcp's published package contains its compiled build.
+RUN npm install --global --omit=dev --ignore-scripts "ssh-mcp@${SSH_MCP_VERSION}" \
+    && npm cache clean --force \
+    && groupadd --system --gid 65532 appgroup \
+    && useradd --system --uid 65532 --gid appgroup --create-home appuser \
+    && mkdir -p /home/appuser/.config/ssh-mcp \
+    && chmod 0700 /home/appuser/.config /home/appuser/.config/ssh-mcp \
+    && chown -R appuser:appgroup /home/appuser
+
+USER 65532:65532
+WORKDIR /home/appuser
+
+ENV NODE_ENV=production
+
+ENTRYPOINT ["ssh-mcp"]
