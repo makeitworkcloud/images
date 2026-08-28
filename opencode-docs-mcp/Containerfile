@@ -1,0 +1,11 @@
+FROM node:22-alpine
+
+LABEL description="OpenCode documentation MCP server"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+RUN npm install --global --omit=dev opencode-docs-mcp@1.0.0 \
+    && npm cache clean --force
+
+USER node
+
+ENTRYPOINT ["opencode-docs-mcp"]
