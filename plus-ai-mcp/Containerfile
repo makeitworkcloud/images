@@ -1,0 +1,25 @@
+FROM python:3.13-alpine
+
+LABEL org.opencontainers.image.title="plus-ai-mcp" \
+      org.opencontainers.image.description="MCP adapter for the Plus AI Presentation APIs" \
+      org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    FASTMCP_HOST=0.0.0.0 \
+    FASTMCP_PORT=8000
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && addgroup -S -g 1000 app \
+    && adduser -S -D -H -u 1000 -G app app
+
+COPY app.py ./
+RUN python -m py_compile app.py
+
+USER 1000
+EXPOSE 8000
+
+CMD ["python", "app.py"]
