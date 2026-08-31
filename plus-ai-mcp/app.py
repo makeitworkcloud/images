@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 API_BASE_URL = "https://api.plusdocs.com/r/v0"
 API_KEY_ENV = "PLUSAI_API_KEY"
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 mcp = FastMCP(
     "Plus AI Presentation API",
@@ -34,6 +36,12 @@ def _api_key() -> str:
     if not key:
         raise RuntimeError(f"{API_KEY_ENV} is not configured")
     return key
+
+
+def _identifier(value: str, field_name: str) -> str:
+    if not IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(f"{field_name} contains invalid characters")
+    return value
 
 
 async def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -85,7 +93,7 @@ async def create_presentation(
 @mcp.tool()
 async def get_presentation(presentation_id: str) -> dict[str, Any]:
     """Get a template-based presentation job, including its PPTX URL when complete."""
-    return await _request("GET", f"/presentation/{presentation_id}")
+    return await _request("GET", f"/presentation/{_identifier(presentation_id, 'presentation_id')}")
 
 
 @mcp.tool()
@@ -99,14 +107,14 @@ async def create_presentation_with_agent(
     if language is not None:
         payload["language"] = language
     if pptx_file_id is not None:
-        payload["pptxFileId"] = pptx_file_id
+        payload["pptxFileId"] = _identifier(pptx_file_id, "pptx_file_id")
     return await _request("POST", "/agent/sessions", payload)
 
 
 @mcp.tool()
 async def get_presentation_agent_session(session_id: str) -> dict[str, Any]:
     """Get Presentation Agent session state and result URLs when its status is DONE."""
-    return await _request("GET", f"/agent/sessions/{session_id}")
+    return await _request("GET", f"/agent/sessions/{_identifier(session_id, 'session_id')}")
 
 
 if __name__ == "__main__":
