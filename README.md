@@ -8,6 +8,7 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 |---|---|---|
 | `tfroot-runner/` | `ghcr.io/actions/actions-runner:2.336.0` (Ubuntu) | gha-runner-scale-set runner with the OpenTofu IaC toolchain (kubectl, kustomize, sops, ansible, pre-commit, tflint, terraform-docs, infracost, checkov) |
 | `gh-cli/` | `alpine:3.24` | Minimal `gh` image for automation Jobs |
+| `ssh-mcp/` | `node:22-slim` | Policy-gated SSH MCP runtime for the cluster-internal ToolHive backend |
 
 ## How It Works
 

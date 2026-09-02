@@ -1,0 +1,28 @@
+# Policy-gated SSH MCP runtime for the cluster-internal ToolHive backend.
+# Keep both the Node base image and the npm package version immutable.
+FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+
+ARG SSH_MCP_VERSION=2.5.1
+
+LABEL org.opencontainers.image.title="ssh-mcp" \
+      org.opencontainers.image.description="Policy-gated SSH MCP server runtime" \
+      org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+# The package is released through npm with provenance; its container image is
+# built and published by this repository so the GitOps consumer can select a
+# Make IT Work Cloud artifact instead of downloading npm packages at runtime.
+RUN npm install --global --omit=dev "ssh-mcp@${SSH_MCP_VERSION}" \
+    && npm cache clean --force \
+    && groupadd --system --gid 65532 appgroup \
+    && useradd --system --uid 65532 --gid appgroup --create-home --home-dir /home/appuser --shell /usr/sbin/nologin appuser \
+    && mkdir -p /home/appuser/.config/ssh-mcp \
+    && chown -R appuser:appgroup /home/appuser \
+    && chmod 700 /home/appuser/.config /home/appuser/.config/ssh-mcp
+
+ENV HOME=/home/appuser \
+    XDG_CONFIG_HOME=/home/appuser/.config \
+    NODE_ENV=production
+
+USER appuser
+
+ENTRYPOINT ["ssh-mcp"]
