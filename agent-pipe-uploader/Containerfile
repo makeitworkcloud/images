@@ -1,0 +1,17 @@
+FROM python:3.13-alpine
+
+ARG FASTMCP_VERSION=3.2.4
+
+LABEL description="Capability-scoped artifact transfer MCP server"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+RUN pip install --no-cache-dir "fastmcp==${FASTMCP_VERSION}" \
+    && adduser -D -u 1000 agent-pipe \
+    && rm -rf /root/.cache /tmp/*
+
+WORKDIR /app
+COPY server.py /app/server.py
+
+USER 1000
+
+ENTRYPOINT ["python3", "/app/server.py"]
