@@ -1,6 +1,6 @@
 # OpenCode SMS bridge
 
-`opencode-sms-bridge` is the private Twilio SMS/MMS ingress and worker for the four fixed mobile OpenCode agents. It is not a general Twilio API proxy and never accepts an agent, model, tool, session, or routing choice from a caller.
+`opencode-sms-bridge` is the private Twilio SMS/MMS ingress and worker for four fixed, existing primary OpenCode agents: `lawnmowerman`, `grillmaster`, `homesteader`, and `homerepair`. It is not a general Twilio API proxy and never accepts an agent, model, tool, session, or routing choice from a caller.
 
 ## Runtime modes
 
@@ -17,12 +17,14 @@ All required values come from cluster-owned Secret mounts or safe chart values. 
 
 | Setting | Mode | Purpose |
 | --- | --- | --- |
-| `ROUTING_CONFIG_PATH` | both | JSON Secret containing the Twilio account ID, approved senders, and exactly four destination-to-fixed-agent mappings. |
+| `ROUTING_CONFIG_PATH` | both | JSON Secret containing the Twilio account ID, approved senders, and exactly four destination-to-primary-agent mappings: one each for `lawnmowerman`, `grillmaster`, `homesteader`, and `homerepair`. |
 | `STATE_PATH`, `STATE_ENCRYPTION_KEY`, `SENDER_HASH_KEY` | both | RWO PVC location and independent encryption/HMAC keys. |
 | `CANONICAL_WEBHOOK_URL`, `TWILIO_AUTH_TOKEN` | both | Canonical public URL for signature validation and Twilio credential for protected media downloads. |
 | `OPENCODE_API_BASE_URL`, `OPENCODE_SERVER_PASSWORD` | worker | Private OpenCode HTTP API endpoint and Basic-auth credential. |
 | `TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET` | worker | Least-privilege Twilio API Key used only for outbound replies. |
 | `WHISPER_URL` | worker, audio MMS | A local Whisper-compatible transcription endpoint. |
+
+Only a signed webhook from a configured approved sender is queued or answered. The bridge invokes the existing primary agent ID, so it receives that agent's normal OpenCode configuration, permissions, MCP availability, and shared instructions. The source allowlist is an ingress identity gate, not standing authorization: existing explicit-confirmation requirements still apply to any mutation requested over SMS.
 
 `OPENCODE_IMAGE_PARTS_ENABLED` defaults to `false`. Set it to `true` only after a configured image-capable OpenCode model and the deployed OpenCode file-part API have been functionally verified. The bridge refuses unsupported image or audio media rather than forwarding unvalidated bytes.
 

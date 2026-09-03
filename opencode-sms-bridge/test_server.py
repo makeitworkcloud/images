@@ -10,7 +10,17 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from twilio.request_validator import RequestValidator
 
-from server import Routing, SQLiteStore, Settings, create_ingress_app, normalize_e164, sanitize_image, sender_hash
+from server import (
+    BridgeError,
+    Routing,
+    SQLiteStore,
+    Settings,
+    create_ingress_app,
+    load_routing,
+    normalize_e164,
+    sanitize_image,
+    sender_hash,
+)
 
 
 class BridgeTests(unittest.TestCase):
@@ -21,10 +31,10 @@ class BridgeTests(unittest.TestCase):
             account_sid="AC1234567890",
             approved_senders=frozenset({"+15559999999"}),
             channels={
-                "+15550000001": "lawnmowerman-sms",
-                "+15550000002": "grillmaster-sms",
-                "+15550000003": "homesteader-sms",
-                "+15550000004": "homerepair-sms",
+                "+15550000001": "lawnmowerman",
+                "+15550000002": "grillmaster",
+                "+15550000003": "homesteader",
+                "+15550000004": "homerepair",
             },
         )
         self.settings = Settings(
@@ -59,11 +69,31 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 normalize_e164(value)
 
+    def test_routing_requires_the_existing_primary_agents(self):
+        routing_path = Path(self.tempdir.name) / "routing.json"
+        payload = {
+            "accountSid": "AC1234567890",
+            "approvedSenders": ["+15559999999"],
+            "channels": {
+                "+15550000001": {"agent": "lawnmowerman"},
+                "+15550000002": {"agent": "grillmaster"},
+                "+15550000003": {"agent": "homesteader"},
+                "+15550000004": {"agent": "homerepair"},
+            },
+        }
+        routing_path.write_text(json.dumps(payload))
+        self.assertEqual(load_routing(routing_path).channels, self.routing.channels)
+
+        payload["channels"]["+15550000001"]["agent"] = "lawnmowerman-sms"
+        routing_path.write_text(json.dumps(payload))
+        with self.assertRaises(BridgeError):
+            load_routing(routing_path)
+
     def test_queue_is_deduplicated_and_payload_is_encrypted(self):
-        payload = {"from": "+15559999999", "to": "+15550000001", "body": "confidential body", "media": [], "agent": "lawnmowerman-sms"}
+        payload = {"from": "+15559999999", "to": "+15550000001", "body": "confidential body", "media": [], "agent": "lawnmowerman"}
         identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
-        self.assertTrue(self.store.enqueue("SM123", "lawnmowerman-sms", identifier, payload))
-        self.assertFalse(self.store.enqueue("SM123", "lawnmowerman-sms", identifier, payload))
+        self.assertTrue(self.store.enqueue("SM123", "lawnmowerman", identifier, payload))
+        self.assertFalse(self.store.enqueue("SM123", "lawnmowerman", identifier, payload))
         with sqlite3.connect(self.settings.state_path) as connection:
             stored = connection.execute("SELECT payload FROM jobs").fetchone()[0]
         self.assertNotIn(b"confidential body", stored)
