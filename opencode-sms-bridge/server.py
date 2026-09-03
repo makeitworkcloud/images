@@ -28,9 +28,7 @@ from twilio.rest import Client
 
 
 LOG = logging.getLogger("opencode-sms-bridge")
-MOBILE_AGENTS = frozenset(
-    {"lawnmowerman-sms", "grillmaster-sms", "homesteader-sms", "homerepair-sms"}
-)
+CHANNEL_AGENTS = frozenset({"lawnmowerman", "grillmaster", "homesteader", "homerepair"})
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response/>'
 MAX_WEBHOOK_BYTES = 64 * 1024
 
@@ -161,8 +159,8 @@ def load_routing(path: Path) -> Routing:
         raise BridgeError("routing account SID is invalid")
     if not approved_senders:
         raise BridgeError("routing configuration needs an approved sender")
-    if len(channels) != 4 or set(channels.values()) != MOBILE_AGENTS:
-        raise BridgeError("routing configuration must map four numbers to the four fixed mobile agents")
+    if len(channels) != 4 or set(channels.values()) != CHANNEL_AGENTS:
+        raise BridgeError("routing configuration must map four numbers to the four fixed primary agents")
     return Routing(account_sid=account_sid, approved_senders=approved_senders, channels=channels)
 
 
@@ -570,7 +568,7 @@ def create_worker_app(settings: Settings, store: SQLiteStore) -> FastAPI:
                 if job is None:
                     await asyncio.sleep(1)
                     continue
-                await asyncio.to_thread(process_job, settings, store, client, job)
+                await asyncio.to_thread(process_job, settings, store, job)
         asyncio.create_task(loop())
 
     @app.get("/healthz")
