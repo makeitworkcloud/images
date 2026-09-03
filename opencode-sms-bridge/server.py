@@ -568,7 +568,7 @@ def create_worker_app(settings: Settings, store: SQLiteStore) -> FastAPI:
                 if job is None:
                     await asyncio.sleep(1)
                     continue
-                await asyncio.to_thread(process_job, settings, store, job)
+                await asyncio.to_thread(process_job, settings, store, client, job)
         asyncio.create_task(loop())
 
     @app.get("/healthz")
