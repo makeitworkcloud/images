@@ -1,0 +1,33 @@
+FROM python:3.13-alpine
+
+ARG CRYPTOGRAPHY_VERSION=50.0.1
+ARG FASTAPI_VERSION=0.141.1
+ARG HTTPX_VERSION=0.28.1
+ARG PILLOW_VERSION=12.3.0
+ARG TWILIO_VERSION=9.10.9
+ARG UVICORN_VERSION=0.52.4
+
+LABEL description="Signed Twilio SMS and MMS bridge for fixed OpenCode agents"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+RUN apk add --no-cache ffmpeg \
+    && pip install --no-cache-dir \
+        "cryptography==${CRYPTOGRAPHY_VERSION}" \
+        "fastapi==${FASTAPI_VERSION}" \
+        "httpx==${HTTPX_VERSION}" \
+        "Pillow==${PILLOW_VERSION}" \
+        "twilio==${TWILIO_VERSION}" \
+        "uvicorn==${UVICORN_VERSION}" \
+    && adduser -D -u 1000 opencode-sms \
+    && rm -rf /root/.cache /tmp/*
+
+WORKDIR /app
+COPY server.py test_server.py /app/
+RUN python3 -m unittest discover -s /app -p "test_*.py" -v
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER 1000
+
+ENTRYPOINT ["python3", "/app/server.py"]

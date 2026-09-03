@@ -1,0 +1,31 @@
+# OpenCode SMS bridge
+
+`opencode-sms-bridge` is the private Twilio SMS/MMS ingress and worker for the four fixed mobile OpenCode agents. It is not a general Twilio API proxy and never accepts an agent, model, tool, session, or routing choice from a caller.
+
+## Runtime modes
+
+One single-replica pod runs two copies of this image:
+
+- `BRIDGE_MODE=ingress` exposes `POST /twilio/inbound` and `GET /healthz`. It validates the complete form-encoded Twilio signature against `CANONICAL_WEBHOOK_URL`, verifies the configured account, destination-number mapping, approved sender, and message SID, then writes one encrypted durable job.
+- `BRIDGE_MODE=worker` exposes a loopback-only health endpoint on port `8081`. It claims queued work, downloads Twilio media only from configured HTTPS Twilio hosts, validates content type, magic bytes, size, and audio duration, then calls the fixed OpenCode agent session and sends one bounded reply through Twilio.
+
+The state database stores encrypted message payloads and HMAC sender identifiers. It deliberately marks uncertain outbound sends as `delivery-unknown` rather than retrying and risking duplicate SMS. The first release is intentionally single replica; do not scale it without replacing SQLite queue/session coordination.
+
+## Required configuration
+
+All required values come from cluster-owned Secret mounts or safe chart values. Do not place values in this repository or chart `values.yaml`.
+
+| Setting | Mode | Purpose |
+| --- | --- | --- |
+| `ROUTING_CONFIG_PATH` | both | JSON Secret containing the Twilio account ID, approved senders, and exactly four destination-to-fixed-agent mappings. |
+| `STATE_PATH`, `STATE_ENCRYPTION_KEY`, `SENDER_HASH_KEY` | both | RWO PVC location and independent encryption/HMAC keys. |
+| `CANONICAL_WEBHOOK_URL`, `TWILIO_AUTH_TOKEN` | both | Canonical public URL for signature validation and Twilio credential for protected media downloads. |
+| `OPENCODE_API_BASE_URL`, `OPENCODE_SERVER_PASSWORD` | worker | Private OpenCode HTTP API endpoint and Basic-auth credential. |
+| `TWILIO_API_KEY_SID`, `TWILIO_API_KEY_SECRET` | worker | Least-privilege Twilio API Key used only for outbound replies. |
+| `WHISPER_URL` | worker, audio MMS | A local Whisper-compatible transcription endpoint. |
+
+`OPENCODE_IMAGE_PARTS_ENABLED` defaults to `false`. Set it to `true` only after a configured image-capable OpenCode model and the deployed OpenCode file-part API have been functionally verified. The bridge refuses unsupported image or audio media rather than forwarding unvalidated bytes.
+
+## Ownership and delivery
+
+`makeitworkcloud/images` owns this source image. Its `main` workflow publishes `ghcr.io/makeitworkcloud/opencode-sms-bridge` after merge. `makeitworkcloud/charts` owns the portable Deployment and configuration wiring; `makeitworkcloud/kustomize-cluster` owns the state PVC, Service, `TunnelBinding`, and SOPS-encrypted Secrets. Publication, GitOps selection, reconciliation, health, Twilio webhook configuration, and functional messaging are separate delivery stages.
