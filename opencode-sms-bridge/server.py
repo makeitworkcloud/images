@@ -480,18 +480,24 @@ class OpenCodeClient:
         basic = base64.b64encode(f"{settings.opencode_username}:{settings.opencode_password}".encode()).decode()
         self.headers = {"Authorization": f"Basic {basic}", "Content-Type": "application/json"}
 
-    def _request(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _request(self, path: str, payload: dict[str, Any] | None = None, method: str = "POST") -> dict[str, Any]:
         request = Request(
             f"{self.settings.opencode_base_url}{path}",
-            data=json.dumps(payload).encode(),
-            method="POST",
+            data=None if payload is None else json.dumps(payload).encode(),
+            method=method,
             headers=self.headers,
         )
         try:
             with build_opener(NoRedirect).open(request, timeout=self.settings.opencode_timeout_seconds) as response:
-                return json.loads(response.read().decode())
-        except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as error:
+                body = response.read()
+        except (HTTPError, URLError, OSError, ValueError) as error:
             raise BridgeError("OpenCode request failed") from error
+        if not body:
+            return {}
+        try:
+            return json.loads(body.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BridgeError("OpenCode response was invalid") from error
 
     def create_session(self, agent: str) -> str:
         response = self._request("/api/session", {"agent": agent})
@@ -502,13 +508,34 @@ class OpenCodeClient:
         return session_id
 
     def prompt(self, session_id: str, parts: list[dict[str, str]]) -> str:
-        response = self._request(f"/session/{session_id}/message", {"parts": parts})
-        data = response.get("data", response)
-        candidates = data.get("parts", []) if isinstance(data, dict) else []
-        text = "".join(part.get("text", "") for part in candidates if part.get("type") == "text")
-        if not text.strip():
-            raise BridgeError("OpenCode response did not contain text")
-        return text.strip()
+        if any(part.get("type") != "text" for part in parts):
+            raise UnsupportedMedia("V2 file prompt mapping is not implemented")
+        text = "\n".join(part.get("text", "") for part in parts).strip()
+        if not text:
+            raise BridgeError("OpenCode prompt has no text")
+        admission = self._request(f"/api/session/{session_id}/prompt", {"prompt": {"text": text}})
+        data = admission.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("id"), str):
+            raise BridgeError("OpenCode prompt admission was invalid")
+        self._request(f"/api/session/{session_id}/wait")
+        response = self._request(f"/api/session/{session_id}/message?order=desc&limit=200", method="GET")
+        messages = response.get("data")
+        if not isinstance(messages, list):
+            raise BridgeError("OpenCode messages response was invalid")
+        for message in messages:
+            if not isinstance(message, dict) or message.get("type") != "assistant":
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            reply = "".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+            )
+            if reply.strip():
+                return reply.strip()
+        raise BridgeError("OpenCode response did not contain text")
 
 
 def build_parts(settings: Settings, payload: dict[str, Any]) -> list[dict[str, str]]:
