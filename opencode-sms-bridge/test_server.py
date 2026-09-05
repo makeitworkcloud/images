@@ -14,19 +14,39 @@ from PIL import Image
 from twilio.request_validator import RequestValidator
 
 from server import (
+    BRIDGE_ERROR_CODES,
     BridgeError,
+    OPENCODE_OPERATION_MESSAGE_LIST,
+    OPENCODE_OPERATION_PROMPT,
+    OPENCODE_OPERATION_WAIT,
     OpenCodeClient,
     Routing,
     SQLiteStore,
     Settings,
     UnsupportedMedia,
+    classify_request_failure,
     create_ingress_app,
     load_routing,
     normalize_e164,
+    opencode_request_error_code,
     process_job,
     sanitize_image,
     sender_hash,
 )
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode()
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
 
 
 class BridgeTests(unittest.TestCase):
@@ -150,9 +170,9 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "reply")
         request.assert_has_calls(
             [
-                call("/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}),
-                call("/api/session/ses_123/wait"),
-                call("/api/session/ses_123/message?order=desc&limit=200", method="GET"),
+                call("/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}, operation=OPENCODE_OPERATION_PROMPT),
+                call("/api/session/ses_123/wait", operation=OPENCODE_OPERATION_WAIT),
+                call("/api/session/ses_123/message?order=desc&limit=200", method="GET", operation=OPENCODE_OPERATION_MESSAGE_LIST),
             ]
         )
         self.assertEqual(request.call_count, 3)
@@ -162,22 +182,82 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(UnsupportedMedia):
             client.prompt("ses_123", [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}])
 
-    def test_opencode_request_errors_map_to_bounded_request_code(self):
+    def test_opencode_request_failures_map_to_static_operation_and_category(self):
         settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
         client = OpenCodeClient(settings)
         failures = (
-            URLError("connection detail"),
-            OSError("socket detail"),
-            HTTPError("https://opencode.example.invalid/api/session", 500, "server detail", None, None),
+            (URLError(ConnectionRefusedError()), "transport"),
+            (URLError(TimeoutError()), "transport"),
+            (URLError("unknown url type"), "url-configuration"),
+            (ValueError("malformed url detail"), "url-configuration"),
+            (OSError("socket detail"), "os"),
+            (HTTPError("https://opencode.example.invalid/api/session", 404, "client detail", None, None), "http-4xx"),
+            (HTTPError("https://opencode.example.invalid/api/session", 429, "rate detail", None, None), "http-4xx"),
+            (HTTPError("https://opencode.example.invalid/api/session", 500, "server detail", None, None), "http-5xx"),
+            (HTTPError("https://opencode.example.invalid/api/session", 503, "unavailable detail", None, None), "http-5xx"),
+            (HTTPError("https://opencode.example.invalid/api/session", 302, "redirect detail", None, None), "unknown"),
         )
-        for failure in failures:
-            with self.subTest(failure=failure):
+        for failure, category in failures:
+            with self.subTest(failure=type(failure).__name__):
                 with patch("server.build_opener") as opener_factory:
                     opener_factory.return_value.open.side_effect = failure
                     with self.assertRaises(BridgeError) as raised:
                         client.create_session("lawnmowerman")
-                self.assertEqual(raised.exception.error_code, "opencode-request-failed")
-                self.assertNotIn("detail", str(raised.exception))
+                self.assertEqual(
+                    raised.exception.error_code,
+                    f"opencode-request-failed:session-create:{category}",
+                )
+                self.assertEqual(str(raised.exception), "OpenCode request failed")
+                self.assertNotIn("detail", raised.exception.error_code)
+                self.assertNotIn("opencode.example.invalid", raised.exception.error_code)
+
+    def test_prompt_flow_failures_map_to_failing_operation(self):
+        settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
+        client = OpenCodeClient(settings)
+        admitted = FakeResponse({"data": {"id": "in_123"}})
+        transport = URLError(TimeoutError())
+        scenarios = (
+            (OPENCODE_OPERATION_PROMPT, [transport, FakeResponse({}), FakeResponse({})]),
+            (OPENCODE_OPERATION_WAIT, [admitted, transport, FakeResponse({})]),
+            (OPENCODE_OPERATION_MESSAGE_LIST, [admitted, FakeResponse({}), transport]),
+        )
+        for operation, sequence in scenarios:
+            with self.subTest(operation=operation):
+                with patch("server.build_opener") as opener_factory:
+                    opener_factory.return_value.open.side_effect = list(sequence)
+                    with self.assertRaises(BridgeError) as raised:
+                        client.prompt("ses_123", [{"type": "text", "text": "hello"}])
+                self.assertEqual(
+                    raised.exception.error_code,
+                    f"opencode-request-failed:{operation}:transport",
+                )
+                self.assertNotIn("ses_123", raised.exception.error_code)
+                self.assertNotIn("opencode.example.invalid", str(raised.exception))
+
+    def test_classifier_preserves_unknown_fallback_for_unmatched_errors(self):
+        unmatched = (
+            RuntimeError("unclassified detail"),
+            KeyError("odd detail"),
+            HTTPError("https://secret.example.invalid/x", 302, "redirect detail", None, None),
+        )
+        for failure in unmatched:
+            with self.subTest(failure=type(failure).__name__):
+                self.assertEqual(classify_request_failure(failure), "unknown")
+                composed = opencode_request_error_code("prompt", classify_request_failure(failure))
+                self.assertEqual(composed, "opencode-request-failed:prompt:unknown")
+                self.assertNotIn("detail", composed)
+                self.assertNotIn("secret.example.invalid", composed)
+
+    def test_composed_request_codes_stay_within_bounded_taxonomy(self):
+        for operation in ("session-create", "prompt", "wait", "message-list"):
+            for category in ("http-4xx", "http-5xx", "transport", "url-configuration", "os", "unknown"):
+                self.assertIn(opencode_request_error_code(operation, category), BRIDGE_ERROR_CODES)
+        self.assertEqual(
+            opencode_request_error_code("no-such-operation", "no-such-category"),
+            "opencode-request-failed:unknown:unknown",
+        )
+        self.assertEqual(opencode_request_error_code(None, None), "opencode-request-failed:unknown:unknown")
+        self.assertNotIn("no-such-operation", opencode_request_error_code("no-such-operation", "transport"))
 
     def test_bridge_error_defaults_to_safe_bounded_code(self):
         self.assertEqual(BridgeError("worker configuration is incomplete").error_code, "opencode-response-invalid")
@@ -202,6 +282,41 @@ class BridgeTests(unittest.TestCase):
         with sqlite3.connect(self.settings.state_path) as connection:
             row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM301'").fetchone()
         self.assertEqual(tuple(row), ("failed", "opencode-input-invalid"))
+
+    def test_process_job_persists_static_request_failure_code_without_raw_detail(self):
+        settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
+        payload = {
+            "from": "+15559999999",
+            "to": "+15550000001",
+            "body": "hello https://secret.example.invalid/token",
+            "media": [],
+            "agent": "lawnmowerman",
+        }
+        identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
+        self.store.enqueue("SM302", "lawnmowerman", identifier, payload)
+        job = self.store.claim()
+        self.store.remember_session("lawnmowerman", identifier, "ses_302")
+        client = OpenCodeClient(settings)
+        with patch("server.build_opener") as opener_factory:
+            opener_factory.return_value.open.side_effect = URLError(ConnectionRefusedError("socket detail"))
+            with self.assertLogs("opencode-sms-bridge", level="WARNING") as captured:
+                process_job(settings, self.store, client, job)
+        telemetry = "\n".join(captured.output)
+        self.assertIn(
+            "event=job_failed stage=opencode channel=lawnmowerman error_code=opencode-request-failed:prompt:transport",
+            telemetry,
+        )
+        for unsafe_value in (
+            "socket detail",
+            "opencode.example.invalid",
+            "secret.example.invalid",
+            "ses_302",
+            payload["body"],
+        ):
+            self.assertNotIn(unsafe_value, telemetry)
+        with sqlite3.connect(self.settings.state_path) as connection:
+            row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM302'").fetchone()
+        self.assertEqual(tuple(row), ("failed", "opencode-request-failed:prompt:transport"))
 
     def test_image_sanitization_removes_exif(self):
         image = Image.new("RGB", (8, 8), color="red")

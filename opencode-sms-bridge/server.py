@@ -36,6 +36,39 @@ ERROR_OPENCODE_REQUEST_FAILED = "opencode-request-failed"
 ERROR_OPENCODE_RESPONSE_INVALID = "opencode-response-invalid"
 ERROR_OPENCODE_INPUT_INVALID = "opencode-input-invalid"
 ERROR_TWILIO_SEND_FAILED = "twilio-send-failed"
+OPENCODE_OPERATION_SESSION_CREATE = "session-create"
+OPENCODE_OPERATION_PROMPT = "prompt"
+OPENCODE_OPERATION_WAIT = "wait"
+OPENCODE_OPERATION_MESSAGE_LIST = "message-list"
+OPENCODE_OPERATIONS = frozenset(
+    {
+        OPENCODE_OPERATION_SESSION_CREATE,
+        OPENCODE_OPERATION_PROMPT,
+        OPENCODE_OPERATION_WAIT,
+        OPENCODE_OPERATION_MESSAGE_LIST,
+    }
+)
+FAILURE_HTTP_4XX = "http-4xx"
+FAILURE_HTTP_5XX = "http-5xx"
+FAILURE_TRANSPORT = "transport"
+FAILURE_URL_CONFIGURATION = "url-configuration"
+FAILURE_OS = "os"
+FAILURE_UNKNOWN = "unknown"
+OPENCODE_FAILURE_CATEGORIES = frozenset(
+    {
+        FAILURE_HTTP_4XX,
+        FAILURE_HTTP_5XX,
+        FAILURE_TRANSPORT,
+        FAILURE_URL_CONFIGURATION,
+        FAILURE_OS,
+        FAILURE_UNKNOWN,
+    }
+)
+OPENCODE_REQUEST_ERROR_CODES = frozenset(
+    f"{ERROR_OPENCODE_REQUEST_FAILED}:{operation}:{category}"
+    for operation in OPENCODE_OPERATIONS | {FAILURE_UNKNOWN}
+    for category in OPENCODE_FAILURE_CATEGORIES
+)
 BRIDGE_ERROR_CODES = frozenset(
     {
         ERROR_OK,
@@ -44,7 +77,7 @@ BRIDGE_ERROR_CODES = frozenset(
         ERROR_OPENCODE_INPUT_INVALID,
         ERROR_TWILIO_SEND_FAILED,
     }
-)
+) | OPENCODE_REQUEST_ERROR_CODES
 
 
 class BridgeError(RuntimeError):
@@ -55,6 +88,28 @@ class BridgeError(RuntimeError):
 
 class UnsupportedMedia(BridgeError):
     pass
+
+
+def classify_request_failure(error: BaseException) -> str:
+    if isinstance(error, HTTPError):
+        if 400 <= error.code <= 499:
+            return FAILURE_HTTP_4XX
+        if 500 <= error.code <= 599:
+            return FAILURE_HTTP_5XX
+        return FAILURE_UNKNOWN
+    if isinstance(error, URLError):
+        return FAILURE_TRANSPORT if isinstance(error.reason, OSError) else FAILURE_URL_CONFIGURATION
+    if isinstance(error, ValueError):
+        return FAILURE_URL_CONFIGURATION
+    if isinstance(error, OSError):
+        return FAILURE_OS
+    return FAILURE_UNKNOWN
+
+
+def opencode_request_error_code(operation: str | None, category: str | None) -> str:
+    safe_operation = operation if operation in OPENCODE_OPERATIONS else FAILURE_UNKNOWN
+    safe_category = category if category in OPENCODE_FAILURE_CATEGORIES else FAILURE_UNKNOWN
+    return f"{ERROR_OPENCODE_REQUEST_FAILED}:{safe_operation}:{safe_category}"
 
 
 @dataclass(frozen=True)
@@ -496,7 +551,13 @@ class OpenCodeClient:
         basic = base64.b64encode(f"{settings.opencode_username}:{settings.opencode_password}".encode()).decode()
         self.headers = {"Authorization": f"Basic {basic}", "Content-Type": "application/json"}
 
-    def _request(self, path: str, payload: dict[str, Any] | None = None, method: str = "POST") -> dict[str, Any]:
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        method: str = "POST",
+        operation: str | None = None,
+    ) -> dict[str, Any]:
         request = Request(
             f"{self.settings.opencode_base_url}{path}",
             data=None if payload is None else json.dumps(payload).encode(),
@@ -507,7 +568,10 @@ class OpenCodeClient:
             with build_opener(NoRedirect).open(request, timeout=self.settings.opencode_timeout_seconds) as response:
                 body = response.read()
         except (HTTPError, URLError, OSError, ValueError) as error:
-            raise BridgeError("OpenCode request failed", ERROR_OPENCODE_REQUEST_FAILED) from error
+            raise BridgeError(
+                "OpenCode request failed",
+                opencode_request_error_code(operation, classify_request_failure(error)),
+            ) from error
         if not body:
             return {}
         try:
@@ -516,7 +580,9 @@ class OpenCodeClient:
             raise BridgeError("OpenCode response was invalid", ERROR_OPENCODE_RESPONSE_INVALID) from error
 
     def create_session(self, agent: str) -> str:
-        response = self._request("/api/session", {"agent": agent})
+        response = self._request(
+            "/api/session", {"agent": agent}, operation=OPENCODE_OPERATION_SESSION_CREATE
+        )
         data = response.get("data", response)
         session_id = data.get("id") if isinstance(data, dict) else None
         if not isinstance(session_id, str) or not session_id:
@@ -529,12 +595,20 @@ class OpenCodeClient:
         text = "\n".join(part.get("text", "") for part in parts).strip()
         if not text:
             raise BridgeError("OpenCode prompt has no text", ERROR_OPENCODE_INPUT_INVALID)
-        admission = self._request(f"/api/session/{session_id}/prompt", {"prompt": {"text": text}})
+        admission = self._request(
+            f"/api/session/{session_id}/prompt",
+            {"prompt": {"text": text}},
+            operation=OPENCODE_OPERATION_PROMPT,
+        )
         data = admission.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("id"), str):
             raise BridgeError("OpenCode prompt admission was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
-        self._request(f"/api/session/{session_id}/wait")
-        response = self._request(f"/api/session/{session_id}/message?order=desc&limit=200", method="GET")
+        self._request(f"/api/session/{session_id}/wait", operation=OPENCODE_OPERATION_WAIT)
+        response = self._request(
+            f"/api/session/{session_id}/message?order=desc&limit=200",
+            method="GET",
+            operation=OPENCODE_OPERATION_MESSAGE_LIST,
+        )
         messages = response.get("data")
         if not isinstance(messages, list):
             raise BridgeError("OpenCode messages response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
