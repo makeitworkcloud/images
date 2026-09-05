@@ -1,0 +1,32 @@
+# Claude Code self-hosted environments runner image.
+#
+# Anthropic does not publish a pre-built runner image; this mirrors their
+# minimal runner Dockerfile from the official deploy docs (keep aligned):
+# https://code.claude.com/docs/en/self-hosted-environments-deploy#build-the-runner-image
+#
+# Upgrade the fleet by bumping CLAUDE_CODE_VERSION and restarting the runners:
+# every session runs the binary baked into this image (the runner disables
+# auto-update inside the sessions it spawns).
+FROM debian:bookworm-slim
+
+# Upstream guards this ARG with :? and passes it via --build-arg; we carry a
+# pinned default so this repo's buildah workflow builds without extra
+# arguments. 2.1.224 is the minimum that recognizes `self-hosted-runner`.
+ARG CLAUDE_CODE_VERSION=2.1.224
+
+LABEL description="Claude Code self-hosted environments runner"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+
+# Standard Claude Code release location; verify against the release's signed
+# manifest per https://code.claude.com/docs/en/setup#binary-integrity-and-code-signing
+RUN curl -fsSL "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/linux-x64/claude" \
+      -o /usr/local/bin/claude && chmod +x /usr/local/bin/claude
+
+RUN git config --system user.name "Claude" \
+ && git config --system user.email "noreply@anthropic.com" \
+ && git config --system --add safe.directory '*'
+
+ENTRYPOINT ["claude"]
