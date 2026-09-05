@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import call, patch
 from urllib.error import HTTPError, URLError
@@ -162,11 +163,12 @@ class BridgeTests(unittest.TestCase):
             client.prompt("ses_123", [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}])
 
     def test_opencode_request_errors_map_to_bounded_request_code(self):
-        client = OpenCodeClient(self.settings)
+        settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
+        client = OpenCodeClient(settings)
         failures = (
             URLError("connection detail"),
             OSError("socket detail"),
-            HTTPError("https://opencode.invalid/api/session", 500, "server detail", None, None),
+            HTTPError("https://opencode.example.invalid/api/session", 500, "server detail", None, None),
         )
         for failure in failures:
             with self.subTest(failure=failure):
