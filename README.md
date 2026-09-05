@@ -9,7 +9,6 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 | `agent-pipe-uploader/` | `python:3.13-alpine` | Internal MCP artifact-transfer service using caller-supplied signed URLs |
 | `tfroot-runner/` | `ghcr.io/actions/actions-runner:2.336.0` (Ubuntu) | gha-runner-scale-set runner with the OpenTofu IaC toolchain (kubectl, kustomize, sops, ansible, pre-commit, tflint, terraform-docs, infracost, checkov) |
 | `gh-cli/` | `alpine:3.24` | Minimal `gh` image for automation Jobs |
-| `claude-runner/` | `debian:bookworm-slim` | Claude Code self-hosted environments runner (`claude self-hosted-runner`) built per Anthropic's official image recipe |
 
 ## How It Works
 
