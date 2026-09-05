@@ -502,7 +502,7 @@ class OpenCodeClient:
         return session_id
 
     def prompt(self, session_id: str, parts: list[dict[str, str]]) -> str:
-        response = self._request(f"/api/session/{session_id}/message", {"parts": parts})
+        response = self._request(f"/session/{session_id}/message", {"parts": parts})
         data = response.get("data", response)
         candidates = data.get("parts", []) if isinstance(data, dict) else []
         text = "".join(part.get("text", "") for part in candidates if part.get("type") == "text")
