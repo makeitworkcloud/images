@@ -212,6 +212,7 @@ class Settings:
     opencode_timeout_seconds: int
     twilio_api_key_sid: str
     twilio_api_key_secret: str
+    twilio_messaging_service_sid: str
     whisper_url: str
     whisper_model: str
 
@@ -247,6 +248,7 @@ class Settings:
             opencode_timeout_seconds=positive_int("OPENCODE_TIMEOUT_SECONDS", 120),
             twilio_api_key_sid=os.environ.get("TWILIO_API_KEY_SID", ""),
             twilio_api_key_secret=os.environ.get("TWILIO_API_KEY_SECRET", ""),
+            twilio_messaging_service_sid=os.environ.get("TWILIO_MESSAGING_SERVICE_SID", "").strip(),
             whisper_url=os.environ.get("WHISPER_URL", "").rstrip("/"),
             whisper_model=os.environ.get("WHISPER_MODEL", "base"),
         )
@@ -539,7 +541,7 @@ def download_media(settings: Settings, item: dict[str, str]) -> tuple[bytes, str
     except (HTTPError, URLError, OSError, ValueError) as error:
         raise UnsupportedMedia("media download failed") from error
     if len(data) > settings.max_media_bytes:
-        raise UnsupportedMedia("media exceeds configured size")
+        raise UnsupportedMedia("media exceeds size limit")
     declared_type = item["contentType"].split(";", 1)[0].lower()
     if actual_type != declared_type:
         raise UnsupportedMedia("media content type does not match")
@@ -736,7 +738,12 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
         return
     try:
         twilio = Client(settings.twilio_api_key_sid, settings.twilio_api_key_secret, settings.routing.account_sid)
-        twilio.messages.create(to=job["payload"]["from"], from_=job["payload"]["to"], body=sms_body(response))
+        message = {"to": job["payload"]["from"], "body": sms_body(response)}
+        if settings.twilio_messaging_service_sid:
+            message["messaging_service_sid"] = settings.twilio_messaging_service_sid
+        else:
+            message["from_"] = job["payload"]["to"]
+        twilio.messages.create(**message)
     except Exception:  # The helper library's exception details can include provider data; do not log them.
         LOG.warning("event=job_delivery_unknown stage=twilio channel=%s", job["channel"])
         store.finish(job["message_sid"], "delivery-unknown", ERROR_TWILIO_SEND_FAILED)
