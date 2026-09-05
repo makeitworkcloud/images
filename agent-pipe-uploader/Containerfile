@@ -11,6 +11,10 @@ RUN pip install --no-cache-dir "fastmcp==${FASTMCP_VERSION}" \
 
 WORKDIR /app
 COPY server.py /app/server.py
+COPY test_server.py /tmp/test_server.py
+
+RUN PYTHONPATH=/app python3 /tmp/test_server.py \
+    && rm -f /tmp/test_server.py
 
 USER 1000
 
