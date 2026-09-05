@@ -268,6 +268,20 @@ class BridgeTests(unittest.TestCase):
                 self.assertNotIn("in_123", str(raised.exception))
                 self.assertNotIn("raw detail", str(raised.exception))
 
+    def test_prompt_classifies_structurally_valid_error_envelope(self):
+        client = OpenCodeClient(self.settings)
+        errored = {
+            "info": {"id": "msg_123", "role": "assistant", "error": {"message": "provider quota exhausted"}},
+            "parts": [],
+        }
+        self.assertIn("opencode-response-error", BRIDGE_ERROR_CODES)
+        with patch.object(client, "_request", return_value=errored):
+            with self.assertRaises(BridgeError) as raised:
+                client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}])
+        self.assertEqual(raised.exception.error_code, "opencode-response-error")
+        self.assertNotIn("provider quota exhausted", str(raised.exception))
+        self.assertNotIn("msg_123", str(raised.exception))
+
     def test_prompt_rejects_unmapped_file_parts(self):
         client = OpenCodeClient(self.settings)
         with self.assertRaises(UnsupportedMedia):
