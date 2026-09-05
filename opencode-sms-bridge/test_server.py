@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from twilio.request_validator import RequestValidator
 
 from server import (
     BridgeError,
+    OpenCodeClient,
     Routing,
     SQLiteStore,
     Settings,
@@ -115,18 +117,27 @@ class BridgeTests(unittest.TestCase):
         self.assertIsNotNone(self.store.claim())
         self.assertIsNone(self.store.claim())
 
-    def test_ingress_ignores_unapproved_sender_after_signature_validation(self):
+    def test_ingress_ignores_unapproved_sender_before_queueing(self):
         form = {"AccountSid": "AC1234567890", "MessageSid": "SM124", "From": "+15558888888", "To": "+15550000001", "Body": "hello", "NumMedia": "0"}
         signature = RequestValidator("auth-token").compute_signature(self.settings.canonical_webhook_url, form)
         client = TestClient(create_ingress_app(self.settings, self.store))
-        with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
-            response = client.post("/twilio/inbound", data=form, headers={"X-Twilio-Signature": signature})
+        with patch.object(self.store, "enqueue", wraps=self.store.enqueue) as enqueue:
+            with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
+                response = client.post("/twilio/inbound", data=form, headers={"X-Twilio-Signature": signature})
         telemetry = "\n".join(captured.output)
         self.assertEqual(response.status_code, 200)
         self.assertIn("event=inbound_ignored reason=account-destination-or-sender", telemetry)
         for unsafe_value in (form["From"], form["To"], form["MessageSid"], form["Body"]):
             self.assertNotIn(unsafe_value, telemetry)
+        enqueue.assert_not_called()
         self.assertIsNone(self.store.claim())
+
+    def test_prompt_uses_compatible_session_message_route(self):
+        parts = [{"type": "text", "text": "hello"}]
+        client = OpenCodeClient(self.settings)
+        with patch.object(client, "_request", return_value={"parts": [{"type": "text", "text": "reply"}]}) as request:
+            self.assertEqual(client.prompt("ses_123", parts), "reply")
+        request.assert_called_once_with("/session/ses_123/message", {"parts": parts})
 
     def test_image_sanitization_removes_exif(self):
         image = Image.new("RGB", (8, 8), color="red")
