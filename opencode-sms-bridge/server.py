@@ -61,10 +61,56 @@ OPENCODE_FAILURE_CATEGORIES = frozenset(
         FAILURE_UNKNOWN,
     }
 )
+RESPONSE_ERROR_PROVIDER_AUTH = "provider-auth"
+RESPONSE_ERROR_CONTEXT_OVERFLOW = "context-overflow"
+RESPONSE_ERROR_ABORTED = "aborted"
+RESPONSE_ERROR_OUTPUT_LENGTH = "output-length"
+RESPONSE_ERROR_STRUCTURED_OUTPUT = "structured-output"
+RESPONSE_ERROR_CONTENT_FILTER = "content-filter"
+RESPONSE_ERROR_UNKNOWN = "unknown"
+RESPONSE_ERROR_CATEGORIES = frozenset(
+    {
+        RESPONSE_ERROR_PROVIDER_AUTH,
+        RESPONSE_ERROR_CONTEXT_OVERFLOW,
+        RESPONSE_ERROR_ABORTED,
+        RESPONSE_ERROR_OUTPUT_LENGTH,
+        RESPONSE_ERROR_STRUCTURED_OUTPUT,
+        RESPONSE_ERROR_CONTENT_FILTER,
+        RESPONSE_ERROR_UNKNOWN,
+    }
+)
+OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES = {
+    "ProviderAuthError": RESPONSE_ERROR_PROVIDER_AUTH,
+    "ContextOverflowError": RESPONSE_ERROR_CONTEXT_OVERFLOW,
+    "MessageAbortedError": RESPONSE_ERROR_ABORTED,
+    "MessageOutputLengthError": RESPONSE_ERROR_OUTPUT_LENGTH,
+    "StructuredOutputError": RESPONSE_ERROR_STRUCTURED_OUTPUT,
+    "ContentFilterError": RESPONSE_ERROR_CONTENT_FILTER,
+}
+RESPONSE_ERROR_API = "api"
+RESPONSE_ERROR_API_NO_STATUS = "no-status"
+RESPONSE_ERROR_API_RETRYABLE = "retryable"
+RESPONSE_ERROR_API_NONRETRYABLE = "nonretryable"
+RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY = "unknown"
+RESPONSE_ERROR_API_STATUSES = frozenset(range(100, 600)) | {RESPONSE_ERROR_API_NO_STATUS}
+RESPONSE_ERROR_API_RETRYABILITIES = frozenset(
+    {
+        RESPONSE_ERROR_API_RETRYABLE,
+        RESPONSE_ERROR_API_NONRETRYABLE,
+        RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY,
+    }
+)
 OPENCODE_REQUEST_ERROR_CODES = frozenset(
     f"{ERROR_OPENCODE_REQUEST_FAILED}:{operation}:{category}"
     for operation in OPENCODE_OPERATIONS | {FAILURE_UNKNOWN}
     for category in OPENCODE_FAILURE_CATEGORIES
+)
+OPENCODE_RESPONSE_ERROR_CODES = frozenset(
+    f"{ERROR_OPENCODE_RESPONSE_ERROR}:{category}" for category in RESPONSE_ERROR_CATEGORIES
+) | frozenset(
+    f"{ERROR_OPENCODE_RESPONSE_ERROR}:{RESPONSE_ERROR_API}:{status}:{retryability}"
+    for status in RESPONSE_ERROR_API_STATUSES
+    for retryability in RESPONSE_ERROR_API_RETRYABILITIES
 )
 BRIDGE_ERROR_CODES = frozenset(
     {
@@ -75,7 +121,7 @@ BRIDGE_ERROR_CODES = frozenset(
         ERROR_OPENCODE_INPUT_INVALID,
         ERROR_TWILIO_SEND_FAILED,
     }
-) | OPENCODE_REQUEST_ERROR_CODES
+) | OPENCODE_REQUEST_ERROR_CODES | OPENCODE_RESPONSE_ERROR_CODES
 
 
 class BridgeError(RuntimeError):
@@ -108,6 +154,36 @@ def opencode_request_error_code(operation: str | None, category: str | None) -> 
     safe_operation = operation if operation in OPENCODE_OPERATIONS else FAILURE_UNKNOWN
     safe_category = category if category in OPENCODE_FAILURE_CATEGORIES else FAILURE_UNKNOWN
     return f"{ERROR_OPENCODE_REQUEST_FAILED}:{safe_operation}:{safe_category}"
+
+
+def classify_response_error(error: Any) -> str:
+    if not isinstance(error, dict):
+        return RESPONSE_ERROR_UNKNOWN
+    name = error.get("name")
+    if isinstance(name, str) and name in OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES:
+        return OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES[name]
+    if name != "APIError":
+        return RESPONSE_ERROR_UNKNOWN
+    data = error.get("data")
+    if not isinstance(data, dict):
+        return f"{RESPONSE_ERROR_API}:{RESPONSE_ERROR_API_NO_STATUS}:{RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY}"
+    status_code = data.get("statusCode")
+    if type(status_code) is int and status_code in RESPONSE_ERROR_API_STATUSES:
+        status = str(status_code)
+    else:
+        status = RESPONSE_ERROR_API_NO_STATUS
+    if data.get("isRetryable") is True:
+        retryability = RESPONSE_ERROR_API_RETRYABLE
+    elif data.get("isRetryable") is False:
+        retryability = RESPONSE_ERROR_API_NONRETRYABLE
+    else:
+        retryability = RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY
+    return f"{RESPONSE_ERROR_API}:{status}:{retryability}"
+
+
+def opencode_response_error_code(error: Any) -> str:
+    candidate = f"{ERROR_OPENCODE_RESPONSE_ERROR}:{classify_response_error(error)}"
+    return candidate if candidate in OPENCODE_RESPONSE_ERROR_CODES else f"{ERROR_OPENCODE_RESPONSE_ERROR}:{RESPONSE_ERROR_UNKNOWN}"
 
 
 @dataclass(frozen=True)
@@ -601,8 +677,9 @@ class OpenCodeClient:
             or not isinstance(response.get("parts"), list)
         ):
             raise BridgeError("OpenCode message response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
-        if response["info"].get("error") is not None:
-            raise BridgeError("OpenCode response reported an error", ERROR_OPENCODE_RESPONSE_ERROR)
+        error = response["info"].get("error")
+        if error is not None:
+            raise BridgeError("OpenCode response reported an error", opencode_response_error_code(error))
         reply = "".join(
             part.get("text", "")
             for part in response["parts"]
