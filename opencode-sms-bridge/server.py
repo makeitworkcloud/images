@@ -38,14 +38,10 @@ ERROR_OPENCODE_INPUT_INVALID = "opencode-input-invalid"
 ERROR_TWILIO_SEND_FAILED = "twilio-send-failed"
 OPENCODE_OPERATION_SESSION_CREATE = "session-create"
 OPENCODE_OPERATION_PROMPT = "prompt"
-OPENCODE_OPERATION_WAIT = "wait"
-OPENCODE_OPERATION_MESSAGE_LIST = "message-list"
 OPENCODE_OPERATIONS = frozenset(
     {
         OPENCODE_OPERATION_SESSION_CREATE,
         OPENCODE_OPERATION_PROMPT,
-        OPENCODE_OPERATION_WAIT,
-        OPENCODE_OPERATION_MESSAGE_LIST,
     }
 )
 FAILURE_HTTP_4XX = "http-4xx"
@@ -595,37 +591,26 @@ class OpenCodeClient:
         text = "\n".join(part.get("text", "") for part in parts).strip()
         if not text:
             raise BridgeError("OpenCode prompt has no text", ERROR_OPENCODE_INPUT_INVALID)
-        admission = self._request(
+        response = self._request(
             f"/api/session/{session_id}/prompt",
             {"prompt": {"text": text}},
             operation=OPENCODE_OPERATION_PROMPT,
         )
-        data = admission.get("data")
-        if not isinstance(data, dict) or not isinstance(data.get("id"), str):
-            raise BridgeError("OpenCode prompt admission was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
-        self._request(f"/api/session/{session_id}/wait", operation=OPENCODE_OPERATION_WAIT)
-        response = self._request(
-            f"/api/session/{session_id}/message?order=desc&limit=200",
-            method="GET",
-            operation=OPENCODE_OPERATION_MESSAGE_LIST,
+        message = response.get("data", response) if isinstance(response, dict) else None
+        if (
+            not isinstance(message, dict)
+            or not isinstance(message.get("info"), dict)
+            or not isinstance(message.get("parts"), list)
+        ):
+            raise BridgeError("OpenCode prompt response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
+        reply = "".join(
+            part.get("text", "")
+            for part in message["parts"]
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
         )
-        messages = response.get("data")
-        if not isinstance(messages, list):
-            raise BridgeError("OpenCode messages response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
-        for message in messages:
-            if not isinstance(message, dict) or message.get("type") != "assistant":
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-            reply = "".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
-            )
-            if reply.strip():
-                return reply.strip()
-        raise BridgeError("OpenCode response did not contain text", ERROR_OPENCODE_RESPONSE_INVALID)
+        if not reply.strip():
+            raise BridgeError("OpenCode response did not contain text", ERROR_OPENCODE_RESPONSE_INVALID)
+        return reply.strip()
 
 
 def build_parts(settings: Settings, payload: dict[str, Any]) -> list[dict[str, str]]:
