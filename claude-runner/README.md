@@ -45,7 +45,7 @@ Contains (upstream's minimal set):
 - System-wide git identity and `safe.directory '*'`, per upstream
 
 Omits, per upstream's hardening guidance (["No broad credentials in the
-image"]((https://code.claude.com/docs/en/self-hosted-environments-deploy#harden-your-deployment))):
+image"](https://code.claude.com/docs/en/self-hosted-environments-deploy#harden-your-deployment)):
 
 - **No environment secret** — mounted at runtime as a Kubernetes Secret and
   passed via `--environment-secret-file` (their recipe)
