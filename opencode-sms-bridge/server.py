@@ -31,10 +31,26 @@ LOG = logging.getLogger("opencode-sms-bridge")
 CHANNEL_AGENTS = frozenset({"lawnmowerman", "grillmaster", "homesteader", "homerepair"})
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response/>'
 MAX_WEBHOOK_BYTES = 64 * 1024
+ERROR_OK = "ok"
+ERROR_OPENCODE_REQUEST_FAILED = "opencode-request-failed"
+ERROR_OPENCODE_RESPONSE_INVALID = "opencode-response-invalid"
+ERROR_OPENCODE_INPUT_INVALID = "opencode-input-invalid"
+ERROR_TWILIO_SEND_FAILED = "twilio-send-failed"
+BRIDGE_ERROR_CODES = frozenset(
+    {
+        ERROR_OK,
+        ERROR_OPENCODE_REQUEST_FAILED,
+        ERROR_OPENCODE_RESPONSE_INVALID,
+        ERROR_OPENCODE_INPUT_INVALID,
+        ERROR_TWILIO_SEND_FAILED,
+    }
+)
 
 
 class BridgeError(RuntimeError):
-    pass
+    def __init__(self, message: str, error_code: str = ERROR_OPENCODE_RESPONSE_INVALID):
+        super().__init__(message)
+        self.error_code = error_code if error_code in BRIDGE_ERROR_CODES else ERROR_OPENCODE_RESPONSE_INVALID
 
 
 class UnsupportedMedia(BridgeError):
@@ -491,20 +507,20 @@ class OpenCodeClient:
             with build_opener(NoRedirect).open(request, timeout=self.settings.opencode_timeout_seconds) as response:
                 body = response.read()
         except (HTTPError, URLError, OSError, ValueError) as error:
-            raise BridgeError("OpenCode request failed") from error
+            raise BridgeError("OpenCode request failed", ERROR_OPENCODE_REQUEST_FAILED) from error
         if not body:
             return {}
         try:
             return json.loads(body.decode())
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise BridgeError("OpenCode response was invalid") from error
+            raise BridgeError("OpenCode response was invalid", ERROR_OPENCODE_RESPONSE_INVALID) from error
 
     def create_session(self, agent: str) -> str:
         response = self._request("/api/session", {"agent": agent})
         data = response.get("data", response)
         session_id = data.get("id") if isinstance(data, dict) else None
         if not isinstance(session_id, str) or not session_id:
-            raise BridgeError("OpenCode session response was invalid")
+            raise BridgeError("OpenCode session response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
         return session_id
 
     def prompt(self, session_id: str, parts: list[dict[str, str]]) -> str:
@@ -512,16 +528,16 @@ class OpenCodeClient:
             raise UnsupportedMedia("V2 file prompt mapping is not implemented")
         text = "\n".join(part.get("text", "") for part in parts).strip()
         if not text:
-            raise BridgeError("OpenCode prompt has no text")
+            raise BridgeError("OpenCode prompt has no text", ERROR_OPENCODE_INPUT_INVALID)
         admission = self._request(f"/api/session/{session_id}/prompt", {"prompt": {"text": text}})
         data = admission.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("id"), str):
-            raise BridgeError("OpenCode prompt admission was invalid")
+            raise BridgeError("OpenCode prompt admission was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
         self._request(f"/api/session/{session_id}/wait")
         response = self._request(f"/api/session/{session_id}/message?order=desc&limit=200", method="GET")
         messages = response.get("data")
         if not isinstance(messages, list):
-            raise BridgeError("OpenCode messages response was invalid")
+            raise BridgeError("OpenCode messages response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
         for message in messages:
             if not isinstance(message, dict) or message.get("type") != "assistant":
                 continue
@@ -535,7 +551,7 @@ class OpenCodeClient:
             )
             if reply.strip():
                 return reply.strip()
-        raise BridgeError("OpenCode response did not contain text")
+        raise BridgeError("OpenCode response did not contain text", ERROR_OPENCODE_RESPONSE_INVALID)
 
 
 def build_parts(settings: Settings, payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -575,9 +591,9 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
     except UnsupportedMedia:
         LOG.info("event=job_unsupported_media channel=%s", job["channel"])
         response = "This channel cannot process that attachment yet. Please send text or try a supported attachment later."
-    except BridgeError:
-        LOG.warning("event=job_failed stage=opencode channel=%s", job["channel"])
-        store.finish(job["message_sid"], "failed", "opencode-failed")
+    except BridgeError as error:
+        LOG.warning("event=job_failed stage=opencode channel=%s error_code=%s", job["channel"], error.error_code)
+        store.finish(job["message_sid"], "failed", error.error_code)
         return
     if not store.begin_send(job["message_sid"]):
         LOG.warning("event=job_skipped stage=state channel=%s", job["channel"])
@@ -587,9 +603,9 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
         twilio.messages.create(to=job["payload"]["from"], from_=job["payload"]["to"], body=sms_body(response))
     except Exception:  # The helper library's exception details can include provider data; do not log them.
         LOG.warning("event=job_delivery_unknown stage=twilio channel=%s", job["channel"])
-        store.finish(job["message_sid"], "delivery-unknown", "twilio-send-failed")
+        store.finish(job["message_sid"], "delivery-unknown", ERROR_TWILIO_SEND_FAILED)
         return
-    store.finish(job["message_sid"], "sent", "ok")
+    store.finish(job["message_sid"], "sent", ERROR_OK)
     LOG.info("event=job_sent channel=%s", job["channel"])
 
 
