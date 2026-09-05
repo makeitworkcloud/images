@@ -162,8 +162,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(
             [request.full_url for request in requests],
             [
-                "https://opencode.example.invalid/api/session",
-                "https://opencode.example.invalid/api/session/ses_new/message",
+                "https://opencode.example.invalid/session",
+                "https://opencode.example.invalid/session/ses_new/message",
             ],
         )
         self.assertEqual(json.loads(requests[0].data.decode()), {})
@@ -172,14 +172,14 @@ class BridgeTests(unittest.TestCase):
             {"agent": "homesteader", "parts": [{"type": "text", "text": "hi"}]},
         )
         for request in requests:
-            for unsupported in ("/prompt", "prompt_async", "/wait"):
+            for unsupported in ("/api", "/prompt", "prompt_async", "/wait"):
                 self.assertNotIn(unsupported, request.full_url)
 
     def test_session_create_sends_only_documented_fields(self):
         client = OpenCodeClient(self.settings)
         with patch.object(client, "_request", return_value={"id": "ses_123"}) as request:
             self.assertEqual(client.create_session(), "ses_123")
-        request.assert_called_once_with("/api/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
+        request.assert_called_once_with("/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
 
     def test_session_create_rejects_invalid_response(self):
         client = OpenCodeClient(self.settings)
@@ -201,13 +201,15 @@ class BridgeTests(unittest.TestCase):
             )
         self.assertEqual(request.call_count, 1)
         request.assert_called_once_with(
-            "/api/session/ses_123/message",
+            "/session/ses_123/message",
             {"agent": "lawnmowerman", "parts": [{"type": "text", "text": "hello"}]},
             operation=OPENCODE_OPERATION_PROMPT,
         )
         for invoked in request.call_args_list:
             path = invoked.args[0]
+            self.assertNotIn("/api", path)
             self.assertNotIn("/prompt", path)
+            self.assertNotIn("prompt_async", path)
             self.assertNotIn("/wait", path)
 
     def test_prompt_joins_text_parts_into_one_documented_text_part(self):
@@ -220,7 +222,7 @@ class BridgeTests(unittest.TestCase):
                 [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}],
             )
         request.assert_called_once_with(
-            "/api/session/ses_123/message",
+            "/session/ses_123/message",
             {"agent": "grillmaster", "parts": [{"type": "text", "text": "line one\nline two"}]},
             operation=OPENCODE_OPERATION_PROMPT,
         )
@@ -283,12 +285,12 @@ class BridgeTests(unittest.TestCase):
             (URLError(TimeoutError()), "transport"),
             (URLError("unknown url type"), "url-configuration"),
             (ValueError("malformed url detail"), "url-configuration"),
-            (OSError("socket detail"), "os"),
-            (HTTPError("https://opencode.example.invalid/api/session", 404, "client detail", None, None), "http-4xx"),
-            (HTTPError("https://opencode.example.invalid/api/session", 429, "rate detail", None, None), "http-4xx"),
-            (HTTPError("https://opencode.example.invalid/api/session", 500, "server detail", None, None), "http-5xx"),
-            (HTTPError("https://opencode.example.invalid/api/session", 503, "unavailable detail", None, None), "http-5xx"),
-            (HTTPError("https://opencode.example.invalid/api/session", 302, "redirect detail", None, None), "unknown"),
+            (OError := OSError("socket detail"), "os"),
+            (HTTPError("https://opencode.example.invalid/session", 404, "client detail", None, None), "http-4xx"),
+            (HTTPError("https://opencode.example.invalid/session", 429, "rate detail", None, None), "http-4xx"),
+            (HTTPError("https://opencode.example.invalid/session", 500, "server detail", None, None), "http-5xx"),
+            (HTTPError("https://opencode.example.invalid/session", 503, "unavailable detail", None, None), "http-5xx"),
+            (HTTPError("https://opencode.example.invalid/session", 302, "redirect detail", None, None), "unknown"),
         )
         for failure, category in failures:
             with self.subTest(failure=type(failure).__name__):
