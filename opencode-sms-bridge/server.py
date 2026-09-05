@@ -34,6 +34,7 @@ MAX_WEBHOOK_BYTES = 64 * 1024
 ERROR_OK = "ok"
 ERROR_OPENCODE_REQUEST_FAILED = "opencode-request-failed"
 ERROR_OPENCODE_RESPONSE_INVALID = "opencode-response-invalid"
+ERROR_OPENCODE_RESPONSE_ERROR = "opencode-response-error"
 ERROR_OPENCODE_INPUT_INVALID = "opencode-input-invalid"
 ERROR_TWILIO_SEND_FAILED = "twilio-send-failed"
 OPENCODE_OPERATION_SESSION_CREATE = "session-create"
@@ -70,6 +71,7 @@ BRIDGE_ERROR_CODES = frozenset(
         ERROR_OK,
         ERROR_OPENCODE_REQUEST_FAILED,
         ERROR_OPENCODE_RESPONSE_INVALID,
+        ERROR_OPENCODE_RESPONSE_ERROR,
         ERROR_OPENCODE_INPUT_INVALID,
         ERROR_TWILIO_SEND_FAILED,
     }
@@ -599,6 +601,8 @@ class OpenCodeClient:
             or not isinstance(response.get("parts"), list)
         ):
             raise BridgeError("OpenCode message response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
+        if response["info"].get("error") is not None:
+            raise BridgeError("OpenCode response reported an error", ERROR_OPENCODE_RESPONSE_ERROR)
         reply = "".join(
             part.get("text", "")
             for part in response["parts"]
