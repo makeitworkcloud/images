@@ -576,7 +576,7 @@ class OpenCodeClient:
             raise BridgeError("OpenCode response was invalid", ERROR_OPENCODE_RESPONSE_INVALID) from error
 
     def create_session(self) -> str:
-        response = self._request("/api/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
+        response = self._request("/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
         session_id = response.get("id") if isinstance(response, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise BridgeError("OpenCode session response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
@@ -589,7 +589,7 @@ class OpenCodeClient:
         if not text:
             raise BridgeError("OpenCode prompt has no text", ERROR_OPENCODE_INPUT_INVALID)
         response = self._request(
-            f"/api/session/{session_id}/message",
+            f"/session/{session_id}/message",
             {"agent": agent, "parts": [{"type": "text", "text": text}]},
             operation=OPENCODE_OPERATION_PROMPT,
         )
