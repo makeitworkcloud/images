@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from server import (
     Routing,
     SQLiteStore,
     Settings,
+    UnsupportedMedia,
     create_ingress_app,
     load_routing,
     normalize_e164,
@@ -132,12 +133,31 @@ class BridgeTests(unittest.TestCase):
         enqueue.assert_not_called()
         self.assertIsNone(self.store.claim())
 
-    def test_prompt_uses_compatible_session_message_route(self):
-        parts = [{"type": "text", "text": "hello"}]
+    def test_prompt_uses_v2_admission_wait_and_message_flow(self):
         client = OpenCodeClient(self.settings)
-        with patch.object(client, "_request", return_value={"parts": [{"type": "text", "text": "reply"}]}) as request:
-            self.assertEqual(client.prompt("ses_123", parts), "reply")
-        request.assert_called_once_with("/session/ses_123/message", {"parts": parts})
+        with patch.object(
+            client,
+            "_request",
+            side_effect=[
+                {"data": {"id": "in_123"}},
+                {},
+                {"data": [{"type": "assistant", "content": [{"type": "text", "text": "reply"}]}]},
+            ],
+        ) as request:
+            self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "reply")
+        request.assert_has_calls(
+            [
+                call("/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}),
+                call("/api/session/ses_123/wait"),
+                call("/api/session/ses_123/message?order=desc&limit=200", method="GET"),
+            ]
+        )
+        self.assertEqual(request.call_count, 3)
+
+    def test_prompt_rejects_unmapped_file_parts(self):
+        client = OpenCodeClient(self.settings)
+        with self.assertRaises(UnsupportedMedia):
+            client.prompt("ses_123", [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}])
 
     def test_image_sanitization_removes_exif(self):
         image = Image.new("RGB", (8, 8), color="red")
