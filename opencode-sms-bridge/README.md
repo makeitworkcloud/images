@@ -11,6 +11,12 @@ One single-replica pod runs two copies of this image:
 
 The state database stores encrypted message payloads and HMAC sender identifiers. It deliberately marks uncertain outbound sends as `delivery-unknown` rather than retrying and risking duplicate SMS. The first release is intentionally single replica; do not scale it without replacing SQLite queue/session coordination.
 
+## PII-safe operational telemetry
+
+The bridge emits structured lifecycle events to container logs without access logs or payload data. Events may include the fixed agent channel, media count, stage, and a bounded reason; they never include phone numbers, message SID values, message bodies, media URLs, sender hashes, session IDs, credentials, or provider exception detail.
+
+Ingress events distinguish rejected signatures, ignored account/destination/sender combinations, queued messages, and duplicates. Worker events distinguish claimed jobs, unsupported media, OpenCode failures, state-transition skips, uncertain Twilio delivery, and successful sends. The persistent encrypted queue remains authoritative for detailed recovery; do not log or export its contents.
+
 ## Required configuration
 
 All required values come from cluster-owned Secret mounts or safe chart values. Do not place values in this repository or chart `values.yaml`.
