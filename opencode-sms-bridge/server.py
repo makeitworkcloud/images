@@ -342,12 +342,20 @@ def create_ingress_app(settings: Settings, store: SQLiteStore) -> FastAPI:
             raise HTTPException(status_code=413, detail="request too large")
         form = parse_form(body)
         if not validate_webhook(settings, form, request.headers.get("x-twilio-signature")):
+            LOG.warning("event=inbound_rejected reason=invalid-signature")
             raise HTTPException(status_code=403, detail="invalid signature")
         message = incoming_payload(settings, form)
         if message is None:
+            LOG.info("event=inbound_ignored reason=account-destination-or-sender")
             return empty_twiml()
         message_sid, channel, source_id, payload = message
-        store.enqueue(message_sid, channel, source_id, payload)
+        queued = store.enqueue(message_sid, channel, source_id, payload)
+        LOG.info(
+            "event=%s channel=%s media_count=%d",
+            "inbound_queued" if queued else "inbound_duplicate",
+            channel,
+            len(payload["media"]),
+        )
         return empty_twiml()
 
     return app
@@ -538,25 +546,30 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
             session_id = store.remember_session(job["channel"], job["sender_hash"], client.create_session(job["payload"]["agent"]))
         response = client.prompt(session_id, build_parts(settings, job["payload"]))
     except UnsupportedMedia:
+        LOG.info("event=job_unsupported_media channel=%s", job["channel"])
         response = "This channel cannot process that attachment yet. Please send text or try a supported attachment later."
     except BridgeError:
+        LOG.warning("event=job_failed stage=opencode channel=%s", job["channel"])
         store.finish(job["message_sid"], "failed", "opencode-failed")
         return
     if not store.begin_send(job["message_sid"]):
+        LOG.warning("event=job_skipped stage=state channel=%s", job["channel"])
         return
     try:
         twilio = Client(settings.twilio_api_key_sid, settings.twilio_api_key_secret, settings.routing.account_sid)
         twilio.messages.create(to=job["payload"]["from"], from_=job["payload"]["to"], body=sms_body(response))
     except Exception:  # The helper library's exception details can include provider data; do not log them.
+        LOG.warning("event=job_delivery_unknown stage=twilio channel=%s", job["channel"])
         store.finish(job["message_sid"], "delivery-unknown", "twilio-send-failed")
         return
     store.finish(job["message_sid"], "sent", "ok")
+    LOG.info("event=job_sent channel=%s", job["channel"])
 
 
 def create_worker_app(settings: Settings, store: SQLiteStore) -> FastAPI:
     settings.worker_ready()
     client = OpenCodeClient(settings)
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(docs_url=None, redoc=None, openapi_url=None)
     app.state.last_cycle = 0.0
 
     @app.on_event("startup")
@@ -568,6 +581,7 @@ def create_worker_app(settings: Settings, store: SQLiteStore) -> FastAPI:
                 if job is None:
                     await asyncio.sleep(1)
                     continue
+                LOG.info("event=job_claimed channel=%s", job["channel"])
                 await asyncio.to_thread(process_job, settings, store, client, job)
         asyncio.create_task(loop())
 

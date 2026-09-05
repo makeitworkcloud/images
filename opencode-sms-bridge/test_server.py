@@ -105,7 +105,12 @@ class BridgeTests(unittest.TestCase):
         signature = RequestValidator("auth-token").compute_signature(self.settings.canonical_webhook_url, form)
         client = TestClient(create_ingress_app(self.settings, self.store))
         headers = {"X-Twilio-Signature": signature}
-        self.assertEqual(client.post("/twilio/inbound", data=form, headers=headers).status_code, 200)
+        with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
+            self.assertEqual(client.post("/twilio/inbound", data=form, headers=headers).status_code, 200)
+        telemetry = "\n".join(captured.output)
+        self.assertIn("event=inbound_queued channel=lawnmowerman media_count=0", telemetry)
+        for unsafe_value in (form["From"], form["To"], form["MessageSid"], form["Body"]):
+            self.assertNotIn(unsafe_value, telemetry)
         self.assertEqual(client.post("/twilio/inbound", data=form, headers=headers).status_code, 200)
         self.assertIsNotNone(self.store.claim())
         self.assertIsNone(self.store.claim())
@@ -114,8 +119,13 @@ class BridgeTests(unittest.TestCase):
         form = {"AccountSid": "AC1234567890", "MessageSid": "SM124", "From": "+15558888888", "To": "+15550000001", "Body": "hello", "NumMedia": "0"}
         signature = RequestValidator("auth-token").compute_signature(self.settings.canonical_webhook_url, form)
         client = TestClient(create_ingress_app(self.settings, self.store))
-        response = client.post("/twilio/inbound", data=form, headers={"X-Twilio-Signature": signature})
+        with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
+            response = client.post("/twilio/inbound", data=form, headers={"X-Twilio-Signature": signature})
+        telemetry = "\n".join(captured.output)
         self.assertEqual(response.status_code, 200)
+        self.assertIn("event=inbound_ignored reason=account-destination-or-sender", telemetry)
+        for unsafe_value in (form["From"], form["To"], form["MessageSid"], form["Body"]):
+            self.assertNotIn(unsafe_value, telemetry)
         self.assertIsNone(self.store.claim())
 
     def test_image_sanitization_removes_exif(self):
