@@ -367,7 +367,7 @@ class BridgeTests(unittest.TestCase):
             (URLError(TimeoutError()), "transport"),
             (URLError("unknown url type"), "url-configuration"),
             (ValueError("malformed url detail"), "url-configuration"),
-            (OSError("socket detail"), "os"),
+            (OError := OSError("socket detail"), "os"),
             (HTTPError("https://opencode.example.invalid/session", 404, "client detail", None, None), "http-4xx"),
             (HTTPError("https://opencode.example.invalid/session", 429, "rate detail", None, None), "http-4xx"),
             (HTTPError("https://opencode.example.invalid/session", 500, "server detail", None, None), "http-5xx"),
@@ -493,6 +493,117 @@ class BridgeTests(unittest.TestCase):
         with sqlite3.connect(self.settings.state_path) as connection:
             row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM302'").fetchone()
         self.assertEqual(tuple(row), ("failed", "opencode-request-failed:prompt:transport"))
+
+    def test_worker_sends_through_messaging_service_without_from_number(self):
+        settings = replace(
+            self.settings,
+            mode="worker",
+            opencode_base_url="https://opencode.example.invalid",
+            twilio_api_key_sid="SKtestkey",
+            twilio_api_key_secret="testsecret",
+            twilio_messaging_service_sid="MGtestservice",
+        )
+        payload = {"from": "+15559999999", "to": "+15550000001", "body": "hello", "media": [], "agent": "lawnmowerman"}
+        identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
+        self.store.enqueue("SM401", "lawnmowerman", identifier, payload)
+        job = self.store.claim()
+        self.store.remember_session("lawnmowerman", identifier, "ses_401")
+        client = OpenCodeClient(settings)
+        with patch.object(client, "prompt", return_value="  Mow   dry grass  at noon.  "):
+            with patch("server.Client") as client_factory:
+                with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
+                    process_job(settings, self.store, client, job)
+        client_factory.assert_called_once_with("SKtestkey", "testsecret", "AC1234567890")
+        create = client_factory.return_value.messages.create
+        create.assert_called_once_with(
+            to="+15559999999",
+            body="Mow dry grass at noon.",
+            messaging_service_sid="MGtestservice",
+        )
+        self.assertNotIn("from_", create.call_args.kwargs)
+        telemetry = "\n".join(captured.output)
+        self.assertIn("event=job_sent channel=lawnmowerman", telemetry)
+        for unsafe_value in (payload["from"], payload["to"], "MGtestservice", "Mow dry grass at noon.", "ses_401"):
+            self.assertNotIn(unsafe_value, telemetry)
+        with sqlite3.connect(self.settings.state_path) as connection:
+            row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM401'").fetchone()
+        self.assertEqual(tuple(row), ("sent", "ok"))
+
+    def test_worker_keeps_direct_from_number_when_messaging_service_is_unset(self):
+        settings = replace(
+            self.settings,
+            mode="worker",
+            opencode_base_url="https://opencode.example.invalid",
+            twilio_api_key_sid="SKtestkey",
+            twilio_api_key_secret="testsecret",
+        )
+        self.assertEqual(settings.twilio_messaging_service_sid, "")
+        payload = {"from": "+15559999999", "to": "+15550000003", "body": "hello", "media": [], "agent": "homesteader"}
+        identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
+        self.store.enqueue("SM402", "homesteader", identifier, payload)
+        job = self.store.claim()
+        self.store.remember_session("homesteader", identifier, "ses_402")
+        client = OpenCodeClient(settings)
+        with patch.object(client, "prompt", return_value="raised beds ready"):
+            with patch("server.Client") as client_factory:
+                with self.assertLogs("opencode-sms-bridge", level="INFO") as captured:
+                    process_job(settings, self.store, client, job)
+        create = client_factory.return_value.messages.create
+        create.assert_called_once_with(to="+15559999999", from_="+15550000003", body="raised beds ready")
+        self.assertNotIn("messaging_service_sid", create.call_args.kwargs)
+        telemetry = "\n".join(captured.output)
+        self.assertIn("event=job_sent channel=homesteader", telemetry)
+        for unsafe_value in (payload["from"], payload["to"], "raised beds ready", "ses_402"):
+            self.assertNotIn(unsafe_value, telemetry)
+        with sqlite3.connect(self.settings.state_path) as connection:
+            row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM402'").fetchone()
+        self.assertEqual(tuple(row), ("sent", "ok"))
+
+    def test_worker_marks_delivery_unknown_and_hides_provider_detail_on_send_failure(self):
+        settings = replace(
+            self.settings,
+            mode="worker",
+            opencode_base_url="https://opencode.example.invalid",
+            twilio_api_key_sid="SKtestkey",
+            twilio_api_key_secret="testsecret",
+            twilio_messaging_service_sid="MGtestservice",
+        )
+        payload = {"from": "+15559999999", "to": "+15550000002", "body": "hello", "media": [], "agent": "grillmaster"}
+        identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
+        self.store.enqueue("SM403", "grillmaster", identifier, payload)
+        job = self.store.claim()
+        self.store.remember_session("grillmaster", identifier, "ses_403")
+        client = OpenCodeClient(settings)
+        with patch.object(client, "prompt", return_value="preheat the grill"):
+            with patch("server.Client") as client_factory:
+                client_factory.return_value.messages.create.side_effect = RuntimeError(
+                    "provider detail 21606 credential"
+                )
+                with self.assertLogs("opencode-sms-bridge", level="WARNING") as captured:
+                    process_job(settings, self.store, client, job)
+        create = client_factory.return_value.messages.create
+        create.assert_called_once_with(
+            to="+15559999999",
+            body="preheat the grill",
+            messaging_service_sid="MGtestservice",
+        )
+        self.assertNotIn("from_", create.call_args.kwargs)
+        telemetry = "\n".join(captured.output)
+        self.assertIn("event=job_delivery_unknown stage=twilio channel=grillmaster", telemetry)
+        for unsafe_value in (
+            "provider detail",
+            "21606",
+            "credential",
+            payload["from"],
+            payload["to"],
+            "MGtestservice",
+            "preheat the grill",
+            "ses_403",
+        ):
+            self.assertNotIn(unsafe_value, telemetry)
+        with sqlite3.connect(self.settings.state_path) as connection:
+            row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM403'").fetchone()
+        self.assertEqual(tuple(row), ("delivery-unknown", "twilio-send-failed"))
 
     def test_image_sanitization_removes_exif(self):
         image = Image.new("RGB", (8, 8), color="red")
