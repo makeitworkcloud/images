@@ -24,10 +24,12 @@ from server import (
     Settings,
     UnsupportedMedia,
     classify_request_failure,
+    classify_response_error,
     create_ingress_app,
     load_routing,
     normalize_e164,
     opencode_request_error_code,
+    opencode_response_error_code,
     process_job,
     sanitize_image,
     sender_hash,
@@ -271,16 +273,82 @@ class BridgeTests(unittest.TestCase):
     def test_prompt_classifies_structurally_valid_error_envelope(self):
         client = OpenCodeClient(self.settings)
         errored = {
-            "info": {"id": "msg_123", "role": "assistant", "error": {"message": "provider quota exhausted"}},
+            "info": {
+                "id": "msg_123",
+                "role": "assistant",
+                "error": {
+                    "name": "APIError",
+                    "data": {
+                        "message": "provider quota exhausted",
+                        "statusCode": 429,
+                        "isRetryable": False,
+                        "responseHeaders": {"authorization": "Bearer private-token"},
+                        "responseBody": "private provider response",
+                        "metadata": {"url": "https://provider.example.invalid/request"},
+                    },
+                },
+            },
             "parts": [],
         }
-        self.assertIn("opencode-response-error", BRIDGE_ERROR_CODES)
+        expected_code = "opencode-response-error:api:429:nonretryable"
+        self.assertIn(expected_code, BRIDGE_ERROR_CODES)
         with patch.object(client, "_request", return_value=errored):
             with self.assertRaises(BridgeError) as raised:
                 client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}])
-        self.assertEqual(raised.exception.error_code, "opencode-response-error")
-        self.assertNotIn("provider quota exhausted", str(raised.exception))
-        self.assertNotIn("msg_123", str(raised.exception))
+        self.assertEqual(raised.exception.error_code, expected_code)
+        for unsafe_value in (
+            "provider quota exhausted",
+            "private-token",
+            "private provider response",
+            "provider.example.invalid",
+            "msg_123",
+        ):
+            self.assertNotIn(unsafe_value, str(raised.exception))
+            self.assertNotIn(unsafe_value, raised.exception.error_code)
+
+    def test_response_error_classifier_uses_only_bounded_fields(self):
+        cases = (
+            (
+                {"name": "ProviderAuthError", "data": {"providerID": "provider-private", "message": "credential detail"}},
+                "opencode-response-error:provider-auth",
+            ),
+            (
+                {"name": "ContextOverflowError", "data": {"message": "context detail", "responseBody": "private body"}},
+                "opencode-response-error:context-overflow",
+            ),
+            (
+                {"name": "MessageAbortedError", "data": {"message": "interrupt detail"}},
+                "opencode-response-error:aborted",
+            ),
+            (
+                {"name": "MessageOutputLengthError", "data": {}},
+                "opencode-response-error:output-length",
+            ),
+            (
+                {"name": "StructuredOutputError", "data": {"message": "schema detail", "retries": 2}},
+                "opencode-response-error:structured-output",
+            ),
+            (
+                {"name": "ContentFilterError", "data": {"message": "filter detail"}},
+                "opencode-response-error:content-filter",
+            ),
+            (
+                {"name": "APIError", "data": {"message": "detail", "statusCode": "429", "isRetryable": "false"}},
+                "opencode-response-error:api:no-status:unknown",
+            ),
+            (
+                {"name": "UnknownError", "data": {"message": "detail", "ref": "private-ref"}},
+                "opencode-response-error:unknown",
+            ),
+            ("not-an-error", "opencode-response-error:unknown"),
+        )
+        for error, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                self.assertEqual(opencode_response_error_code(error), expected_code)
+                self.assertIn(expected_code, BRIDGE_ERROR_CODES)
+        self.assertEqual(classify_response_error({"name": "APIError", "data": None}), "api:no-status:unknown")
+        self.assertNotIn("credential detail", opencode_response_error_code(cases[0][0]))
+        self.assertNotIn("private-ref", opencode_response_error_code(cases[-2][0]))
 
     def test_prompt_rejects_unmapped_file_parts(self):
         client = OpenCodeClient(self.settings)
@@ -367,6 +435,10 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(BridgeError("worker configuration is incomplete").error_code, "opencode-response-invalid")
         self.assertEqual(BridgeError("legacy detail", "opencode-failed").error_code, "opencode-response-invalid")
         self.assertEqual(BridgeError("OpenCode prompt has no text", "opencode-input-invalid").error_code, "opencode-input-invalid")
+        self.assertEqual(
+            BridgeError("OpenCode response reported an error", "opencode-response-error:api:401:nonretryable").error_code,
+            "opencode-response-error:api:401:nonretryable",
+        )
 
     def test_process_job_persists_bounded_error_code(self):
         payload = {"from": "+15559999999", "to": "+15550000001", "body": "hello", "media": [], "agent": "lawnmowerman"}
