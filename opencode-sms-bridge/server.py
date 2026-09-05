@@ -575,37 +575,33 @@ class OpenCodeClient:
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise BridgeError("OpenCode response was invalid", ERROR_OPENCODE_RESPONSE_INVALID) from error
 
-    def create_session(self, agent: str) -> str:
-        response = self._request(
-            "/api/session", {"agent": agent}, operation=OPENCODE_OPERATION_SESSION_CREATE
-        )
-        data = response.get("data", response)
-        session_id = data.get("id") if isinstance(data, dict) else None
+    def create_session(self) -> str:
+        response = self._request("/api/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
+        session_id = response.get("id") if isinstance(response, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise BridgeError("OpenCode session response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
         return session_id
 
-    def prompt(self, session_id: str, parts: list[dict[str, str]]) -> str:
+    def prompt(self, session_id: str, agent: str, parts: list[dict[str, str]]) -> str:
         if any(part.get("type") != "text" for part in parts):
             raise UnsupportedMedia("V2 file prompt mapping is not implemented")
         text = "\n".join(part.get("text", "") for part in parts).strip()
         if not text:
             raise BridgeError("OpenCode prompt has no text", ERROR_OPENCODE_INPUT_INVALID)
         response = self._request(
-            f"/api/session/{session_id}/prompt",
-            {"prompt": {"text": text}},
+            f"/api/session/{session_id}/message",
+            {"agent": agent, "parts": [{"type": "text", "text": text}]},
             operation=OPENCODE_OPERATION_PROMPT,
         )
-        message = response.get("data", response) if isinstance(response, dict) else None
         if (
-            not isinstance(message, dict)
-            or not isinstance(message.get("info"), dict)
-            or not isinstance(message.get("parts"), list)
+            not isinstance(response, dict)
+            or not isinstance(response.get("info"), dict)
+            or not isinstance(response.get("parts"), list)
         ):
-            raise BridgeError("OpenCode prompt response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
+            raise BridgeError("OpenCode message response was invalid", ERROR_OPENCODE_RESPONSE_INVALID)
         reply = "".join(
             part.get("text", "")
-            for part in message["parts"]
+            for part in response["parts"]
             if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
         )
         if not reply.strip():
@@ -645,8 +641,8 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
     try:
         session_id = store.session(job["channel"], job["sender_hash"])
         if session_id is None:
-            session_id = store.remember_session(job["channel"], job["sender_hash"], client.create_session(job["payload"]["agent"]))
-        response = client.prompt(session_id, build_parts(settings, job["payload"]))
+            session_id = store.remember_session(job["channel"], job["sender_hash"], client.create_session())
+        response = client.prompt(session_id, job["payload"]["agent"], build_parts(settings, job["payload"]))
     except UnsupportedMedia:
         LOG.info("event=job_unsupported_media channel=%s", job["channel"])
         response = "This channel cannot process that attachment yet. Please send text or try a supported attachment later."

@@ -17,6 +17,7 @@ from server import (
     BRIDGE_ERROR_CODES,
     BridgeError,
     OPENCODE_OPERATION_PROMPT,
+    OPENCODE_OPERATION_SESSION_CREATE,
     OpenCodeClient,
     Routing,
     SQLiteStore,
@@ -140,47 +141,119 @@ class BridgeTests(unittest.TestCase):
         enqueue.assert_not_called()
         self.assertIsNone(self.store.claim())
 
-    def test_prompt_makes_single_blocking_request(self):
+    def test_documented_flow_uses_exact_routes_methods_and_bodies(self):
+        settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
+        client = OpenCodeClient(settings)
+        session_body = json.dumps({"id": "ses_new"}).encode()
+        message_body = json.dumps(
+            {"info": {"id": "msg_1", "role": "assistant"}, "parts": [{"type": "text", "text": "reply"}]}
+        ).encode()
+        with patch("server.build_opener") as opener_factory:
+            context = opener_factory.return_value.open.return_value.__enter__.return_value
+            context.read.side_effect = [session_body, message_body]
+            session_id = client.create_session()
+            reply = client.prompt(session_id, "homesteader", [{"type": "text", "text": "hi"}])
+        self.assertEqual(session_id, "ses_new")
+        self.assertEqual(reply, "reply")
+        open_mock = opener_factory.return_value.open
+        self.assertEqual(open_mock.call_count, 2)
+        requests = [call.args[0] for call in open_mock.call_args_list]
+        self.assertEqual([request.get_method() for request in requests], ["POST", "POST"])
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                "https://opencode.example.invalid/api/session",
+                "https://opencode.example.invalid/api/session/ses_new/message",
+            ],
+        )
+        self.assertEqual(json.loads(requests[0].data.decode()), {})
+        self.assertEqual(
+            json.loads(requests[1].data.decode()),
+            {"agent": "homesteader", "parts": [{"type": "text", "text": "hi"}]},
+        )
+        for request in requests:
+            for unsupported in ("/prompt", "prompt_async", "/wait"):
+                self.assertNotIn(unsupported, request.full_url)
+
+    def test_session_create_sends_only_documented_fields(self):
+        client = OpenCodeClient(self.settings)
+        with patch.object(client, "_request", return_value={"id": "ses_123"}) as request:
+            self.assertEqual(client.create_session(), "ses_123")
+        request.assert_called_once_with("/api/session", {}, operation=OPENCODE_OPERATION_SESSION_CREATE)
+
+    def test_session_create_rejects_invalid_response(self):
+        client = OpenCodeClient(self.settings)
+        for invalid in ({}, {"data": {"id": "ses_123"}}, "ses_123"):
+            with self.subTest(invalid=invalid):
+                with patch.object(client, "_request", return_value=invalid):
+                    with self.assertRaises(BridgeError) as raised:
+                        client.create_session()
+                self.assertEqual(raised.exception.error_code, "opencode-response-invalid")
+                self.assertNotIn("ses_123", str(raised.exception))
+
+    def test_prompt_makes_single_blocking_message_request(self):
         client = OpenCodeClient(self.settings)
         completed = {"info": {"id": "msg_123", "role": "assistant"}, "parts": [{"type": "text", "text": "reply"}]}
         with patch.object(client, "_request", return_value=completed) as request:
-            self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "reply")
+            self.assertEqual(
+                client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}]),
+                "reply",
+            )
         self.assertEqual(request.call_count, 1)
         request.assert_called_once_with(
-            "/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}, operation=OPENCODE_OPERATION_PROMPT
+            "/api/session/ses_123/message",
+            {"agent": "lawnmowerman", "parts": [{"type": "text", "text": "hello"}]},
+            operation=OPENCODE_OPERATION_PROMPT,
         )
         for invoked in request.call_args_list:
             path = invoked.args[0]
+            self.assertNotIn("/prompt", path)
             self.assertNotIn("/wait", path)
-            self.assertNotIn("/message", path)
+
+    def test_prompt_joins_text_parts_into_one_documented_text_part(self):
+        client = OpenCodeClient(self.settings)
+        completed = {"info": {"id": "msg_123"}, "parts": [{"type": "text", "text": "reply"}]}
+        with patch.object(client, "_request", return_value=completed) as request:
+            client.prompt(
+                "ses_123",
+                "grillmaster",
+                [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}],
+            )
+        request.assert_called_once_with(
+            "/api/session/ses_123/message",
+            {"agent": "grillmaster", "parts": [{"type": "text", "text": "line one\nline two"}]},
+            operation=OPENCODE_OPERATION_PROMPT,
+        )
 
     def test_prompt_extracts_assistant_text_from_info_and_parts(self):
         client = OpenCodeClient(self.settings)
         completed = {
-            "data": {
-                "info": {"id": "msg_123", "role": "assistant"},
-                "parts": [
-                    {"type": "step-start"},
-                    {"type": "tool", "tool": "read", "state": {"content": "raw file detail"}},
-                    {"type": "text", "text": " part one "},
-                    {"type": "text", "text": "part two"},
-                ],
-            }
+            "info": {"id": "msg_123", "role": "assistant"},
+            "parts": [
+                {"type": "step-start"},
+                {"type": "tool", "tool": "read", "state": {"content": "raw file detail"}},
+                {"type": "text", "text": " part one "},
+                {"type": "text", "text": "part two"},
+            ],
         }
         with patch.object(client, "_request", return_value=completed) as request:
-            self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "part one part two")
+            self.assertEqual(
+                client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}]),
+                "part one part two",
+            )
         self.assertEqual(request.call_count, 1)
 
-    def test_prompt_rejects_invalid_prompt_results_safely(self):
+    def test_prompt_rejects_invalid_message_results_safely(self):
         client = OpenCodeClient(self.settings)
         invalid_results = (
             {},
             {"id": "in_123"},
             {"data": {"id": "in_123"}},
+            {"data": {"info": {"id": "msg_123"}, "parts": [{"type": "text", "text": "wrapped"}]}},
             {"info": {"id": "msg_123"}, "parts": "not-a-list"},
             {"info": "not-an-object", "parts": []},
-            {"data": {"info": {"id": "msg_123"}, "parts": [{"type": "tool", "state": {"output": "raw detail"}}]}},
-            {"data": {"info": {"id": "msg_123"}, "parts": [{"type": "text", "text": "   "}]}},
+            {"info": {"id": "msg_123"}, "parts": [{"type": "tool", "state": {"output": "raw detail"}}]},
+            {"info": {"id": "msg_123"}, "parts": [{"type": "text", "text": "   "}]},
             [{"type": "text", "text": "list"}],
             "raw string",
         )
@@ -188,7 +261,7 @@ class BridgeTests(unittest.TestCase):
             with self.subTest(result=result):
                 with patch.object(client, "_request", return_value=result):
                     with self.assertRaises(BridgeError) as raised:
-                        client.prompt("ses_123", [{"type": "text", "text": "hello"}])
+                        client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}])
                 self.assertEqual(raised.exception.error_code, "opencode-response-invalid")
                 self.assertNotIn("in_123", str(raised.exception))
                 self.assertNotIn("raw detail", str(raised.exception))
@@ -196,7 +269,11 @@ class BridgeTests(unittest.TestCase):
     def test_prompt_rejects_unmapped_file_parts(self):
         client = OpenCodeClient(self.settings)
         with self.assertRaises(UnsupportedMedia):
-            client.prompt("ses_123", [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}])
+            client.prompt(
+                "ses_123",
+                "lawnmowerman",
+                [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}],
+            )
 
     def test_opencode_request_failures_map_to_static_operation_and_category(self):
         settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
@@ -218,7 +295,7 @@ class BridgeTests(unittest.TestCase):
                 with patch("server.build_opener") as opener_factory:
                     opener_factory.return_value.open.side_effect = failure
                     with self.assertRaises(BridgeError) as raised:
-                        client.create_session("lawnmowerman")
+                        client.create_session()
                 self.assertEqual(
                     raised.exception.error_code,
                     f"opencode-request-failed:session-create:{category}",
@@ -233,7 +310,7 @@ class BridgeTests(unittest.TestCase):
         with patch("server.build_opener") as opener_factory:
             opener_factory.return_value.open.side_effect = URLError(TimeoutError())
             with self.assertRaises(BridgeError) as raised:
-                client.prompt("ses_123", [{"type": "text", "text": "hello"}])
+                client.prompt("ses_123", "lawnmowerman", [{"type": "text", "text": "hello"}])
         self.assertEqual(
             raised.exception.error_code,
             "opencode-request-failed:prompt:transport",
@@ -261,6 +338,8 @@ class BridgeTests(unittest.TestCase):
                 self.assertIn(opencode_request_error_code(operation, category), BRIDGE_ERROR_CODES)
         self.assertNotIn("opencode-request-failed:wait:transport", BRIDGE_ERROR_CODES)
         self.assertNotIn("opencode-request-failed:message-list:transport", BRIDGE_ERROR_CODES)
+        self.assertNotIn("opencode-request-failed:prompt-async:transport", BRIDGE_ERROR_CODES)
+        self.assertNotIn("opencode-request-failed:message:transport", BRIDGE_ERROR_CODES)
         self.assertEqual(
             opencode_request_error_code("no-such-operation", "no-such-category"),
             "opencode-request-failed:unknown:unknown",
