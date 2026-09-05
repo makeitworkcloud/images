@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import call, patch
+from urllib.error import HTTPError, URLError
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from server import (
     create_ingress_app,
     load_routing,
     normalize_e164,
+    process_job,
     sanitize_image,
     sender_hash,
 )
@@ -158,6 +160,46 @@ class BridgeTests(unittest.TestCase):
         client = OpenCodeClient(self.settings)
         with self.assertRaises(UnsupportedMedia):
             client.prompt("ses_123", [{"type": "file", "mime": "image/png", "filename": "image", "url": "data:image/png;base64,"}])
+
+    def test_opencode_request_errors_map_to_bounded_request_code(self):
+        client = OpenCodeClient(self.settings)
+        failures = (
+            URLError("connection detail"),
+            OSError("socket detail"),
+            HTTPError("https://opencode.invalid/api/session", 500, "server detail", None, None),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                with patch("server.build_opener") as opener_factory:
+                    opener_factory.return_value.open.side_effect = failure
+                    with self.assertRaises(BridgeError) as raised:
+                        client.create_session("lawnmowerman")
+                self.assertEqual(raised.exception.error_code, "opencode-request-failed")
+                self.assertNotIn("detail", str(raised.exception))
+
+    def test_bridge_error_defaults_to_safe_bounded_code(self):
+        self.assertEqual(BridgeError("worker configuration is incomplete").error_code, "opencode-response-invalid")
+        self.assertEqual(BridgeError("legacy detail", "opencode-failed").error_code, "opencode-response-invalid")
+        self.assertEqual(BridgeError("OpenCode prompt has no text", "opencode-input-invalid").error_code, "opencode-input-invalid")
+
+    def test_process_job_persists_bounded_error_code(self):
+        payload = {"from": "+15559999999", "to": "+15550000001", "body": "hello", "media": [], "agent": "lawnmowerman"}
+        identifier = sender_hash(self.settings.sender_hash_key, payload["from"])
+        self.store.enqueue("SM301", "lawnmowerman", identifier, payload)
+        job = self.store.claim()
+        self.store.remember_session("lawnmowerman", identifier, "ses_301")
+        client = OpenCodeClient(self.settings)
+        failure = BridgeError("OpenCode prompt has no text", "opencode-input-invalid")
+        with patch.object(client, "prompt", side_effect=failure):
+            with self.assertLogs("opencode-sms-bridge", level="WARNING") as captured:
+                process_job(self.settings, self.store, client, job)
+        telemetry = "\n".join(captured.output)
+        self.assertIn("event=job_failed stage=opencode channel=lawnmowerman error_code=opencode-input-invalid", telemetry)
+        self.assertNotIn("opencode-failed", telemetry)
+        self.assertNotIn(payload["body"], telemetry)
+        with sqlite3.connect(self.settings.state_path) as connection:
+            row = connection.execute("SELECT status, detail_code FROM jobs WHERE message_sid='SM301'").fetchone()
+        self.assertEqual(tuple(row), ("failed", "opencode-input-invalid"))
 
     def test_image_sanitization_removes_exif(self):
         image = Image.new("RGB", (8, 8), color="red")
