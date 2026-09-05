@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from cryptography.fernet import Fernet
@@ -16,9 +16,7 @@ from twilio.request_validator import RequestValidator
 from server import (
     BRIDGE_ERROR_CODES,
     BridgeError,
-    OPENCODE_OPERATION_MESSAGE_LIST,
     OPENCODE_OPERATION_PROMPT,
-    OPENCODE_OPERATION_WAIT,
     OpenCodeClient,
     Routing,
     SQLiteStore,
@@ -33,20 +31,6 @@ from server import (
     sanitize_image,
     sender_hash,
 )
-
-
-class FakeResponse:
-    def __init__(self, payload):
-        self._body = json.dumps(payload).encode()
-
-    def read(self):
-        return self._body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
 
 
 class BridgeTests(unittest.TestCase):
@@ -156,26 +140,58 @@ class BridgeTests(unittest.TestCase):
         enqueue.assert_not_called()
         self.assertIsNone(self.store.claim())
 
-    def test_prompt_uses_v2_admission_wait_and_message_flow(self):
+    def test_prompt_makes_single_blocking_request(self):
         client = OpenCodeClient(self.settings)
-        with patch.object(
-            client,
-            "_request",
-            side_effect=[
-                {"data": {"id": "in_123"}},
-                {},
-                {"data": [{"type": "assistant", "content": [{"type": "text", "text": "reply"}]}]},
-            ],
-        ) as request:
+        completed = {"info": {"id": "msg_123", "role": "assistant"}, "parts": [{"type": "text", "text": "reply"}]}
+        with patch.object(client, "_request", return_value=completed) as request:
             self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "reply")
-        request.assert_has_calls(
-            [
-                call("/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}, operation=OPENCODE_OPERATION_PROMPT),
-                call("/api/session/ses_123/wait", operation=OPENCODE_OPERATION_WAIT),
-                call("/api/session/ses_123/message?order=desc&limit=200", method="GET", operation=OPENCODE_OPERATION_MESSAGE_LIST),
-            ]
+        self.assertEqual(request.call_count, 1)
+        request.assert_called_once_with(
+            "/api/session/ses_123/prompt", {"prompt": {"text": "hello"}}, operation=OPENCODE_OPERATION_PROMPT
         )
-        self.assertEqual(request.call_count, 3)
+        for invoked in request.call_args_list:
+            path = invoked.args[0]
+            self.assertNotIn("/wait", path)
+            self.assertNotIn("/message", path)
+
+    def test_prompt_extracts_assistant_text_from_info_and_parts(self):
+        client = OpenCodeClient(self.settings)
+        completed = {
+            "data": {
+                "info": {"id": "msg_123", "role": "assistant"},
+                "parts": [
+                    {"type": "step-start"},
+                    {"type": "tool", "tool": "read", "state": {"content": "raw file detail"}},
+                    {"type": "text", "text": " part one "},
+                    {"type": "text", "text": "part two"},
+                ],
+            }
+        }
+        with patch.object(client, "_request", return_value=completed) as request:
+            self.assertEqual(client.prompt("ses_123", [{"type": "text", "text": "hello"}]), "part one part two")
+        self.assertEqual(request.call_count, 1)
+
+    def test_prompt_rejects_invalid_prompt_results_safely(self):
+        client = OpenCodeClient(self.settings)
+        invalid_results = (
+            {},
+            {"id": "in_123"},
+            {"data": {"id": "in_123"}},
+            {"info": {"id": "msg_123"}, "parts": "not-a-list"},
+            {"info": "not-an-object", "parts": []},
+            {"data": {"info": {"id": "msg_123"}, "parts": [{"type": "tool", "state": {"output": "raw detail"}}]}},
+            {"data": {"info": {"id": "msg_123"}, "parts": [{"type": "text", "text": "   "}]}},
+            [{"type": "text", "text": "list"}],
+            "raw string",
+        )
+        for result in invalid_results:
+            with self.subTest(result=result):
+                with patch.object(client, "_request", return_value=result):
+                    with self.assertRaises(BridgeError) as raised:
+                        client.prompt("ses_123", [{"type": "text", "text": "hello"}])
+                self.assertEqual(raised.exception.error_code, "opencode-response-invalid")
+                self.assertNotIn("in_123", str(raised.exception))
+                self.assertNotIn("raw detail", str(raised.exception))
 
     def test_prompt_rejects_unmapped_file_parts(self):
         client = OpenCodeClient(self.settings)
@@ -211,28 +227,19 @@ class BridgeTests(unittest.TestCase):
                 self.assertNotIn("detail", raised.exception.error_code)
                 self.assertNotIn("opencode.example.invalid", raised.exception.error_code)
 
-    def test_prompt_flow_failures_map_to_failing_operation(self):
+    def test_prompt_request_failure_maps_to_prompt_operation(self):
         settings = replace(self.settings, opencode_base_url="https://opencode.example.invalid")
         client = OpenCodeClient(settings)
-        admitted = FakeResponse({"data": {"id": "in_123"}})
-        transport = URLError(TimeoutError())
-        scenarios = (
-            (OPENCODE_OPERATION_PROMPT, [transport, FakeResponse({}), FakeResponse({})]),
-            (OPENCODE_OPERATION_WAIT, [admitted, transport, FakeResponse({})]),
-            (OPENCODE_OPERATION_MESSAGE_LIST, [admitted, FakeResponse({}), transport]),
+        with patch("server.build_opener") as opener_factory:
+            opener_factory.return_value.open.side_effect = URLError(TimeoutError())
+            with self.assertRaises(BridgeError) as raised:
+                client.prompt("ses_123", [{"type": "text", "text": "hello"}])
+        self.assertEqual(
+            raised.exception.error_code,
+            "opencode-request-failed:prompt:transport",
         )
-        for operation, sequence in scenarios:
-            with self.subTest(operation=operation):
-                with patch("server.build_opener") as opener_factory:
-                    opener_factory.return_value.open.side_effect = list(sequence)
-                    with self.assertRaises(BridgeError) as raised:
-                        client.prompt("ses_123", [{"type": "text", "text": "hello"}])
-                self.assertEqual(
-                    raised.exception.error_code,
-                    f"opencode-request-failed:{operation}:transport",
-                )
-                self.assertNotIn("ses_123", raised.exception.error_code)
-                self.assertNotIn("opencode.example.invalid", str(raised.exception))
+        self.assertNotIn("ses_123", raised.exception.error_code)
+        self.assertNotIn("opencode.example.invalid", str(raised.exception))
 
     def test_classifier_preserves_unknown_fallback_for_unmatched_errors(self):
         unmatched = (
@@ -249,9 +256,11 @@ class BridgeTests(unittest.TestCase):
                 self.assertNotIn("secret.example.invalid", composed)
 
     def test_composed_request_codes_stay_within_bounded_taxonomy(self):
-        for operation in ("session-create", "prompt", "wait", "message-list"):
+        for operation in ("session-create", "prompt"):
             for category in ("http-4xx", "http-5xx", "transport", "url-configuration", "os", "unknown"):
                 self.assertIn(opencode_request_error_code(operation, category), BRIDGE_ERROR_CODES)
+        self.assertNotIn("opencode-request-failed:wait:transport", BRIDGE_ERROR_CODES)
+        self.assertNotIn("opencode-request-failed:message-list:transport", BRIDGE_ERROR_CODES)
         self.assertEqual(
             opencode_request_error_code("no-such-operation", "no-such-category"),
             "opencode-request-failed:unknown:unknown",
