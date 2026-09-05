@@ -34,6 +34,12 @@ Only a signed webhook from a configured approved sender is queued or answered. T
 
 `OPENCODE_IMAGE_PARTS_ENABLED` defaults to `false`. Set it to `true` only after a configured image-capable OpenCode model and the deployed OpenCode file-part API have been functionally verified. The bridge refuses unsupported image or audio media rather than forwarding unvalidated bytes.
 
+## Optional Messaging Service delivery
+
+`TWILIO_MESSAGING_SERVICE_SID` is an optional worker setting holding a Twilio Messaging Service SID. The SID is a non-secret identifier, not a credential, so it may come from safe chart values while the Twilio API Key credentials stay Secret-mounted. When the setting is non-empty, the worker submits each reply through `messages.create` with exactly `to`, `body`, and `messaging_service_sid`; it never passes a `from_` number on that path. When the setting is empty or unset, the worker keeps the exact existing direct-send behavior and replies `from_` the channel's configured destination number. The choice is fixed per deployment, never per message, and the setting is not added to the worker's required-configuration gate.
+
+Configuring a Messaging Service changes only how replies are submitted to Twilio. A2P 10DLC campaign registration, toll-free verification, and associating the four channel numbers with the Messaging Service are separate manual Twilio-console operations owned by the operator; this bridge neither performs nor validates that association, and an approved-sender end-to-end SMS test remains the delivery gate.
+
 ## Ownership and delivery
 
 `makeitworkcloud/images` owns this source image. Its `main` workflow publishes `ghcr.io/makeitworkcloud/opencode-sms-bridge` after merge. `makeitworkcloud/charts` owns the portable Deployment and configuration wiring; `makeitworkcloud/kustomize-cluster` owns the state PVC, Service, `TunnelBinding`, and SOPS-encrypted Secrets. Publication, GitOps selection, reconciliation, health, Twilio webhook configuration, and functional messaging are separate delivery stages.
