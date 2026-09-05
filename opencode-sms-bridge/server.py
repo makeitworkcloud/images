@@ -569,7 +569,7 @@ def process_job(settings: Settings, store: SQLiteStore, client: OpenCodeClient, 
 def create_worker_app(settings: Settings, store: SQLiteStore) -> FastAPI:
     settings.worker_ready()
     client = OpenCodeClient(settings)
-    app = FastAPI(docs_url=None, redoc=None, openapi_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.last_cycle = 0.0
 
     @app.on_event("startup")
