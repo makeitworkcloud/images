@@ -206,7 +206,7 @@ class BridgeTests(unittest.TestCase):
             (URLError(TimeoutError()), "transport"),
             (URLError("unknown url type"), "url-configuration"),
             (ValueError("malformed url detail"), "url-configuration"),
-            (OError if False else OSError("socket detail"), "os"),
+            (OSError("socket detail"), "os"),
             (HTTPError("https://opencode.example.invalid/api/session", 404, "client detail", None, None), "http-4xx"),
             (HTTPError("https://opencode.example.invalid/api/session", 429, "rate detail", None, None), "http-4xx"),
             (HTTPError("https://opencode.example.invalid/api/session", 500, "server detail", None, None), "http-5xx"),
