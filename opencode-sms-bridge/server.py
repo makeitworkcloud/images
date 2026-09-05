@@ -79,6 +79,14 @@ RESPONSE_ERROR_CATEGORIES = frozenset(
         RESPONSE_ERROR_UNKNOWN,
     }
 )
+OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES = {
+    "ProviderAuthError": RESPONSE_ERROR_PROVIDER_AUTH,
+    "ContextOverflowError": RESPONSE_ERROR_CONTEXT_OVERFLOW,
+    "MessageAbortedError": RESPONSE_ERROR_ABORTED,
+    "MessageOutputLengthError": RESPONSE_ERROR_OUTPUT_LENGTH,
+    "StructuredOutputError": RESPONSE_ERROR_STRUCTURED_OUTPUT,
+    "ContentFilterError": RESPONSE_ERROR_CONTENT_FILTER,
+}
 RESPONSE_ERROR_API = "api"
 RESPONSE_ERROR_API_NO_STATUS = "no-status"
 RESPONSE_ERROR_API_RETRYABLE = "retryable"
@@ -152,30 +160,24 @@ def classify_response_error(error: Any) -> str:
     if not isinstance(error, dict):
         return RESPONSE_ERROR_UNKNOWN
     name = error.get("name")
-    named_categories = {
-        "ProviderAuthError": RESPONSE_ERROR_PROVIDER_AUTH,
-        "ContextOverflowError": RESPONSE_ERROR_CONTEXT_OVERFLOW,
-        "MessageAbortedError": RESPONSE_ERROR_ABORTED,
-        "MessageOutputLengthError": RESPONSE_ERROR_OUTPUT_LENGTH,
-        "StructuredOutputError": RESPONSE_ERROR_STRUCTURED_OUTPUT,
-        "ContentFilterError": RESPONSE_ERROR_CONTENT_FILTER,
-    }
-    if name in named_categories:
-        return named_categories[name]
+    if isinstance(name, str) and name in OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES:
+        return OPENCODE_RESPONSE_ERROR_NAME_CATEGORIES[name]
     if name != "APIError":
         return RESPONSE_ERROR_UNKNOWN
     data = error.get("data")
     if not isinstance(data, dict):
         return f"{RESPONSE_ERROR_API}:{RESPONSE_ERROR_API_NO_STATUS}:{RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY}"
     status_code = data.get("statusCode")
-    status = str(status_code) if type(status_code) is int and status_code in RESPONSE_ERROR_API_STATUSES else RESPONSE_ERROR_API_NO_STATUS
-    retryability = (
-        RESPONSE_ERROR_API_RETRYABLE
-        if data.get("isRetryable") is True
-        else RESPONSE_ERROR_API_NONRETRYABLE
-        if data.get("isRetryable") is False
-        else RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY
-    )
+    if type(status_code) is int and status_code in RESPONSE_ERROR_API_STATUSES:
+        status = str(status_code)
+    else:
+        status = RESPONSE_ERROR_API_NO_STATUS
+    if data.get("isRetryable") is True:
+        retryability = RESPONSE_ERROR_API_RETRYABLE
+    elif data.get("isRetryable") is False:
+        retryability = RESPONSE_ERROR_API_NONRETRYABLE
+    else:
+        retryability = RESPONSE_ERROR_API_UNKNOWN_RETRYABILITY
     return f"{RESPONSE_ERROR_API}:{status}:{retryability}"
 
 
@@ -304,7 +306,7 @@ def load_routing(path: Path) -> Routing:
         raise BridgeError("routing configuration needs an approved sender")
     if len(channels) != 4 or set(channels.values()) != CHANNEL_AGENTS:
         raise BridgeError("routing configuration must map four numbers to the four fixed primary agents")
-    return Routing(account_sid, approved_senders, channels)
+    return Routing(account_sid=account_sid, approved_senders=approved_senders, channels=channels)
 
 
 def sender_hash(key: bytes, sender: str) -> str:
