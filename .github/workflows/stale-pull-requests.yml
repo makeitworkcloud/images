@@ -1,0 +1,19 @@
+---
+# Temporary repository-local dry-run caller. Organization-wide adoption remains
+# owned by tfroot-github after branch-protection-compatible adoption.
+name: stale-pull-requests
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  stale:
+    uses: makeitworkcloud/shared-workflows/.github/workflows/_stale-pull-requests.yml@e7560bb511468fd800aedbc783d02950d3dff5ca
+    with:
+      dry-run: true
