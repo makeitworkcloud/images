@@ -1,0 +1,53 @@
+# codebase-memory-mcp: stdio MCP server that indexes mounted repositories
+# into a SQLite knowledge graph (tree-sitter, 162 languages, bundled local
+# embeddings, read-only Cypher queries). Deployed as the
+# makeitwork-codebase-memory MCPServer backend in
+# kustomize-cluster/workloads/mcp-gateway, succeeding the repo-search
+# filesystem backend (owner decision 2026-09-09).
+#
+# Upstream ships no official container image; this follows the proven recipe
+# from upstream pkg/glama/Dockerfile using the fully static "-portable"
+# release asset (gcc -static), so the runtime base carries no library
+# dependency. The archive hash is pinned from the official release
+# checksums.txt; bump both ARGs together when updating.
+
+ARG CBM_VERSION=v0.10.8
+ARG CBM_TARBALL_SHA256=6eef49652bc0c7820f43114125044d40bf7f4d97c11b2592f6b0f6a307702325
+
+FROM --platform=linux/amd64 debian:bookworm-slim AS fetch
+
+ARG CBM_VERSION
+ARG CBM_TARBALL_SHA256
+
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/codebase-memory-mcp.tar.gz \
+        "https://github.com/DeusData/codebase-memory-mcp/releases/download/${CBM_VERSION}/codebase-memory-mcp-linux-amd64-portable.tar.gz" \
+    && printf '%s  %s\n' "${CBM_TARBALL_SHA256}" "/tmp/codebase-memory-mcp.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/codebase-memory-mcp.tar.gz -C /tmp codebase-memory-mcp LICENSE THIRD_PARTY_NOTICES.md \
+    && chmod 0755 /tmp/codebase-memory-mcp \
+    && rm -f /tmp/codebase-memory-mcp.tar.gz
+
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+LABEL description="codebase-memory-mcp stdio MCP server for the mcp-gateway repo-cache backend"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+COPY --from=fetch /tmp/codebase-memory-mcp /usr/local/bin/codebase-memory-mcp
+COPY --from=fetch /tmp/LICENSE /tmp/THIRD_PARTY_NOTICES.md /usr/share/doc/codebase-memory-mcp/
+
+# Non-root runtime; the consuming MCPServer podTemplateSpec pins the uid.
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin cbm
+
+USER 1000
+
+# Runtime contract (supplied by the consuming MCPServer, not baked here):
+#   CBM_ALLOWED_ROOT — confinement root (/repos in-cluster)
+#   CBM_CACHE_DIR    — writable index directory (disk-backed emptyDir)
+#   CBM_RUNTIME_DIR  — writable daemon rendezvous directory (emptyDir)
+#   CBM_WORKERS / CBM_MEM_BUDGET_MB — cgroup-sized resource controls
+#   HOME             — writable path (/tmp in-cluster)
+# The binary makes no outbound network requests.
+ENTRYPOINT ["/usr/local/bin/codebase-memory-mcp"]
