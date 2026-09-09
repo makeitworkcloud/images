@@ -10,6 +10,7 @@ Backend for the `makeitwork-codebase-memory` ToolHive `MCPServer` in `kustomize-
 
 - Uses the fully static `linux-amd64-portable` release asset; the runtime base carries no library dependency on the binary.
 - `CBM_VERSION` and `CBM_TARBALL_SHA256` are pinned ARGs; the hash is copied from the upstream release's official `checksums.txt`. Bump both together.
+- `--ui=false` is baked into the ENTRYPOINT and must be preserved: upstream auto-enables the embedded graph-UI HTTP listener (loopback :9749) on first run when the cache directory has no UI config, which is every start on an emptyDir-backed `CBM_CACHE_DIR`.
 - amd64 only (single-node k3s); an arm64 build would use `codebase-memory-mcp-linux-arm64-portable.tar.gz`.
 
 ## Runtime contract

@@ -10,6 +10,11 @@
 # release asset (gcc -static), so the runtime base carries no library
 # dependency. The archive hash is pinned from the official release
 # checksums.txt; bump both ARGs together when updating.
+#
+# --ui=false is mandatory: upstream auto-enables the embedded graph-UI HTTP
+# listener (loopback :9749) on first run when the cache dir has no UI config
+# yet, which is every start on an emptyDir-backed CBM_CACHE_DIR
+# (infra-security review 2026-09-09; upstream docs/CONFIGURATION.md §3).
 
 ARG CBM_VERSION=v0.10.8
 ARG CBM_TARBALL_SHA256=6eef49652bc0c7820f43114125044d40bf7f4d97c11b2592f6b0f6a307702325
@@ -49,5 +54,6 @@ USER 1000
 #   CBM_RUNTIME_DIR  — writable daemon rendezvous directory (emptyDir)
 #   CBM_WORKERS / CBM_MEM_BUDGET_MB — cgroup-sized resource controls
 #   HOME             — writable path (/tmp in-cluster)
-# The binary makes no outbound network requests.
-ENTRYPOINT ["/usr/local/bin/codebase-memory-mcp"]
+# The binary makes no outbound network requests; --ui=false keeps the
+# embedded graph-UI listener off.
+ENTRYPOINT ["/usr/local/bin/codebase-memory-mcp", "--ui=false"]
