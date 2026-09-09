@@ -7,6 +7,7 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 | Directory | Base | Purpose |
 |---|---|---|
 | `agent-pipe-uploader/` | `python:3.13-alpine` | Internal MCP artifact-transfer service using caller-supplied signed URLs |
+| `gcloud-mcp/` | pinned Node 22 slim + Google Cloud CLI | Keyless, allowlist-constrained Google Cloud CLI MCP server |
 | `tfroot-runner/` | `ghcr.io/actions/actions-runner:2.336.0` (Ubuntu) | gha-runner-scale-set runner with the OpenTofu IaC toolchain (kubectl, kustomize, sops, ansible, pre-commit, tflint, terraform-docs, infracost, checkov) |
 | `gh-cli/` | `alpine:3.24` | Minimal `gh` image for automation Jobs |
 

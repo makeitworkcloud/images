@@ -1,0 +1,31 @@
+FROM docker.io/library/node:22-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+
+ARG GCLOUD_MCP_VERSION=0.5.3
+ARG GOOGLE_CLOUD_CLI_VERSION=580.0.0
+
+LABEL description="Keyless Google Cloud CLI MCP server"
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg which \
+    && curl --fail --silent --show-error --location \
+        --output /tmp/google-cloud-apt-key.gpg \
+        https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    && gpg --dearmor --batch --yes \
+        --output /usr/share/keyrings/google-cloud.gpg \
+        /tmp/google-cloud-apt-key.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        "google-cloud-cli=${GOOGLE_CLOUD_CLI_VERSION}-0" \
+    && npm install --global --omit=dev "@google-cloud/gcloud-mcp@${GCLOUD_MCP_VERSION}" \
+    && gcloud --version \
+    && gcloud-mcp --help > /dev/null \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/* /root/.cache /root/.npm /tmp/*
+
+USER node
+WORKDIR /home/node
+
+ENTRYPOINT ["gcloud-mcp"]
