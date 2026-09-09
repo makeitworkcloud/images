@@ -12,7 +12,8 @@ token, or Terraform state. The consuming ToolHive `MCPServer` must provide:
 - a dedicated Kubernetes ServiceAccount and projected OIDC token;
 - a non-secret Google Workload Identity Federation credential-configuration
   file mounted from a ConfigMap;
-- `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` pointing to that file;
+- `GOOGLE_APPLICATION_CREDENTIALS` and
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` pointing to that file;
 - writable `HOME`, `CLOUDSDK_CONFIG`, and temporary directories; and
 - a restrictive `gcloud-mcp --config` allowlist mounted from a ConfigMap.
 
@@ -29,5 +30,6 @@ its command allowlist and Google IAM role set are separate read boundaries.
 
 Pull-request CI builds this image but does not publish it. A confirmed merge to
 `main` publishes `ghcr.io/makeitworkcloud/gcloud-mcp:latest` and a commit-SHA
-tag. Consumers must select a verified immutable image reference through their
-own GitOps pull request; image publication alone does not deploy it.
+tag. Neither tag is an OCI manifest digest: consumers must select and record a
+verified `ghcr.io/makeitworkcloud/gcloud-mcp@sha256:<manifest-digest>` through
+their own GitOps pull request. Image publication alone does not deploy it.
