@@ -14,12 +14,19 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 ## How It Works
 
 ```
-push to main ─▶ detect changed images ─▶ pre-commit + hadolint ─▶ buildah build ─▶ push to GHCR
+push to main ─▶ detect changed images ─▶ pre-commit + hadolint ─▶ buildah build ─▶ push to GHCR ─▶ attest digest
 ```
 
 `workflow_dispatch` accepts an optional `image` input to rebuild a single image; with no input it builds all images. Manual dispatch defaults to **build & push**; select **build** for a non-publishing validation run.
 
 The detect step uses the `Makefile` (`make changed-images` / `make list-images-json`) to enumerate directories that contain a `Containerfile`.
+
+## Supply-chain attestations
+
+After a publishing build, CI resolves the immutable digest behind the SHA tag,
+generates an SPDX JSON SBOM from that digest, and attaches both the SBOM and
+build provenance to the GHCR image. PR and non-publishing manual builds do not
+publish images or attestations.
 
 ## Adding an Image
 

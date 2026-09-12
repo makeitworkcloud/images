@@ -24,7 +24,7 @@ production publication.
 
 ## Build Workflow (`buildah.yml`)
 
-Single workflow, three jobs, all on `ubuntu-latest`.
+Single workflow, four jobs, all on `ubuntu-latest`.
 
 1. **checks** — runs pre-commit, including full-tree Gitleaks scanning,
    hadolint, and actionlint, for every `main` push, pull request, and manual
@@ -39,6 +39,10 @@ Single workflow, three jobs, all on `ubuntu-latest`.
    - on `push` to `main`, or `workflow_dispatch` with `mode=build & push`, push to GHCR with tags `latest` and `${{ github.sha }}`
 
 PRs and `workflow_dispatch` with `mode=build` build but do not push.
+4. **attest** — after an image is pushed, resolve its immutable GHCR digest,
+   generate an SPDX SBOM with Syft, and publish both SBOM and build-provenance
+   attestations. This job runs only for `main` pushes and explicit publishing
+   dispatches; it must not run for PR builds.
 
 ## Makefile
 

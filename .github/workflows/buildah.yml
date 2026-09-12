@@ -159,3 +159,65 @@ jobs:
           registry: ghcr.io/makeitworkcloud
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+  attest:
+    name: attest ${{ matrix.image }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      artifact-metadata: write
+      id-token: write
+    needs: [build, detect]
+    if: >-
+      needs.build.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'build & push'))
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.detect.outputs.images) }}
+
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Resolve published image digest
+        id: image
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image_name="ghcr.io/makeitworkcloud/${{ matrix.image }}"
+          echo "$GITHUB_TOKEN" | skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${image_name}:${GITHUB_SHA}")"
+          printf 'name=%s\n' "$image_name" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ steps.image.outputs.name }}@${{ steps.image.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          output-file: ${{ matrix.image }}.spdx.json
+          format: spdx-json
+          syft-version: v1.51.1
+          upload-artifact: false
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: ${{ matrix.image }}.spdx.json
+          push-to-registry: true
