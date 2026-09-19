@@ -1,5 +1,7 @@
 # OpenCode SMS bridge
 
+> **Deprecated 2026-09-19.** This image is retired from build and publication. Every `make` selection target excludes it, and CI rejects a manual dispatch that names it, so no new `ghcr.io/makeitworkcloud/opencode-sms-bridge` tags will be pushed. Existing published tags and attestations remain available unchanged. The source, `Containerfile`, and tests are retained for history and local test runs.
+
 `opencode-sms-bridge` is the private Twilio SMS/MMS ingress and worker for four fixed, existing primary OpenCode agents: `lawnmowerman`, `grillmaster`, `homesteader`, and `homerepair`. It is not a general Twilio API proxy and never accepts an agent, model, tool, session, or routing choice from a caller.
 
 ## Runtime modes

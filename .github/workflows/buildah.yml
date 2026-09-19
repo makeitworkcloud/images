@@ -109,6 +109,10 @@ jobs:
           INPUT_IMAGE: ${{ inputs.image }}
         run: |
           if [ -n "$INPUT_IMAGE" ]; then
+            if ! make list-images-json | jq -e --arg img "$INPUT_IMAGE" 'index($img) != null' > /dev/null; then
+              echo "::error::$INPUT_IMAGE is not a buildable image directory (unknown or retired); refusing to select it for build."
+              exit 1
+            fi
             echo "images=[\"$INPUT_IMAGE\"]" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "images=$(make list-images-json)" >> "$GITHUB_OUTPUT"
