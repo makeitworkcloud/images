@@ -5,6 +5,10 @@
 # Remove this workflow after the confirmed cleanup run.
 #
 # Known limits, deliberately not bypassed:
+# - The org-wide package inventory GET returned 400 Invalid argument for the
+#   repository GITHUB_TOKEN, so only the exact package-scoped endpoints are
+#   used; an initial metadata 404 FAILS the run (it may mask a permission
+#   problem) instead of claiming the package is absent.
 # - GitHub refuses REST deletion of a public package when any version has
 #   more than 5000 downloads; the run fails and GitHub support is the path.
 # - GITHUB_TOKEN deletion works because this repository's publishing
@@ -37,6 +41,15 @@ jobs:
             const expectedRepo = 'makeitworkcloud/images';
             const expectedName = 'opencode-sms-bridge';
             const packageType = 'container';
+            const maxVerifyAttempts = 5;
+
+            // Fail with status and message only: never log raw error
+            // objects, stack traces, or request headers.
+            const failWith = (label, error) => {
+              const status = error && Number.isInteger(error.status) ? error.status : 'no-status';
+              const message = error && error.message ? String(error.message) : 'unknown error';
+              core.setFailed(`${label}: status=${status} message=${message}`);
+            };
 
             // Fail-closed guard mirroring the job-level condition.
             const repoFull = `${context.repo.owner}/${context.repo.repo}`;
@@ -61,36 +74,31 @@ jobs:
               return;
             }
 
-            // 1) Paginated org inventory GET. A 403 fails the step; only a
-            //    successful inventory may conclude the package is absent.
-            const inventory = await github.paginate(
-              github.rest.packages.listPackagesForOrganization,
-              { org: owner, package_type: packageType, per_page: 100 },
-            );
-            core.info(`org ${packageType} inventory: ${inventory.length} package(s)`);
-            const listed = inventory.find(
-              (p) => p.name === expectedName && p.package_type === packageType,
-            );
-            if (!listed) {
-              // Idempotent re-run: absent after a successful inventory GET.
-              core.notice(`package "${expectedName}" is absent from the org inventory; nothing to do`);
+            // 1) Exact metadata GET with the publisher GITHUB_TOKEN. The
+            //    org-wide inventory endpoint is NOT used (it returns 400
+            //    Invalid argument for this token). Any error, including
+            //    404, FAILS: 404 may mask a permission problem, so absence
+            //    is never inferred here.
+            let meta;
+            try {
+              meta = (
+                await github.rest.packages.getPackageForOrganization({
+                  org: owner,
+                  package_type: packageType,
+                  package_name: expectedName,
+                })
+              ).data;
+            } catch (error) {
+              failWith('package metadata GET failed', error);
               return;
             }
-
-            // 2) Authoritative metadata. Verify before any DELETE; fail
-            //    closed on any mismatch or missing repository association.
-            const meta = (
-              await github.rest.packages.getPackageForOrganization({
-                org: owner,
-                package_type: packageType,
-                package_name: expectedName,
-              })
-            ).data;
             const repoLabel = meta.repository ? meta.repository.full_name : 'none';
             core.info(`resolved id=${meta.id} name=${meta.name} type=${meta.package_type}`);
             core.info(`visibility=${meta.visibility} version_count=${meta.version_count} repository=${repoLabel}`);
             const problems = [];
-            if (meta.id !== listed.id) problems.push(`inventory id ${listed.id} != metadata id ${meta.id}`);
+            if (!Number.isSafeInteger(meta.id) || meta.id <= 0) {
+              problems.push(`id ${meta.id} is not a positive safe integer`);
+            }
             if (meta.name !== expectedName) problems.push(`name "${meta.name}" != "${expectedName}"`);
             if (meta.package_type !== packageType) problems.push(`type "${meta.package_type}" != "${packageType}"`);
             if (!meta.repository) problems.push('package has no repository association');
@@ -102,41 +110,62 @@ jobs:
               return;
             }
 
-            // 3) Count real versions from the API before deleting.
-            const versions = await github.paginate(
-              github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
-              { org: owner, package_type: packageType, package_name: expectedName, per_page: 100 },
-            );
+            // 2) Count real versions from the exact endpoint before deleting.
+            let versions;
+            try {
+              versions = await github.paginate(
+                github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
+                { org: owner, package_type: packageType, package_name: expectedName, per_page: 100 },
+              );
+            } catch (error) {
+              failWith('package versions GET failed', error);
+              return;
+            }
             core.info(`versions present: ${versions.length} (sample id=${versions.length > 0 ? versions[0].id : 'none'})`);
 
-            // 4) Delete the ENTIRE package, not individual versions.
-            await github.rest.packages.deletePackageForOrganization({
-              org: owner,
-              package_type: packageType,
-              package_name: expectedName,
-            });
-            core.info(`DELETE accepted for "${expectedName}" (id=${meta.id})`);
-
-            // 5) Verify with the same token: GET must 404 and the relisted
-            //    inventory must not contain the package.
+            // 3) Delete the ENTIRE package, not individual versions. A
+            //    successful 204 confirms the deletion was accepted.
             try {
-              await github.rest.packages.getPackageForOrganization({
+              await github.rest.packages.deletePackageForOrganization({
                 org: owner,
                 package_type: packageType,
                 package_name: expectedName,
               });
-              core.setFailed('package is still readable after deletion');
+            } catch (error) {
+              failWith('package DELETE failed', error);
               return;
-            } catch (postError) {
-              if (postError.status !== 404) throw postError;
-              core.info('post-delete GET returned 404 as expected');
             }
-            const relisted = await github.paginate(
-              github.rest.packages.listPackagesForOrganization,
-              { org: owner, package_type: packageType, per_page: 100 },
+            core.info(`DELETE accepted (204) for "${expectedName}" (id=${meta.id})`);
+
+            // 4) Bounded verification with the same token: at most five
+            //    metadata GETs; 200 waits 1s and retries (eventual
+            //    consistency), 404 confirms the accepted deletion, any
+            //    other result fails. No org-wide relist is used (the
+            //    inventory endpoint 400s for this token).
+            for (let attempt = 1; attempt <= maxVerifyAttempts; attempt += 1) {
+              try {
+                await github.rest.packages.getPackageForOrganization({
+                  org: owner,
+                  package_type: packageType,
+                  package_name: expectedName,
+                });
+              } catch (error) {
+                if (error && error.status === 404) {
+                  core.notice(
+                    `deleted package "${expectedName}" (id=${meta.id}, ${versions.length} version(s)); ` +
+                      `post-delete GET returned 404 on attempt ${attempt}`,
+                  );
+                  return;
+                }
+                failWith(`post-delete GET failed on attempt ${attempt}`, error);
+                return;
+              }
+              if (attempt < maxVerifyAttempts) {
+                core.info(`post-delete GET attempt ${attempt} still returned 200; waiting 1s for eventual consistency`);
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+              }
+            }
+            core.setFailed(
+              `package "${expectedName}" (id=${meta.id}) was still readable after DELETE (204) ` +
+                `and ${maxVerifyAttempts} verification attempts`,
             );
-            if (relisted.some((p) => p.name === expectedName)) {
-              core.setFailed('package is still listed in the org inventory after deletion');
-              return;
-            }
-            core.notice(`deleted package "${expectedName}" (id=${meta.id}, ${versions.length} version(s)); relist confirms absence`);
