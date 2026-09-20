@@ -123,16 +123,26 @@ jobs:
             }
             core.info(`versions present: ${versions.length} (sample id=${versions.length > 0 ? versions[0].id : 'none'})`);
 
-            // 3) Delete the ENTIRE package, not individual versions. A
-            //    successful 204 confirms the deletion was accepted.
+            // 3) Delete the ENTIRE package, not individual versions, via the
+            //    documented REST route. The pinned runtime exposes no
+            //    github.rest.packages helper for this endpoint (run
+            //    35492786770 failed "is not a function"), so call
+            //    github.request with raw parameters; the runtime encodes
+            //    them and step 0 already verified this exact route's URL
+            //    construction. Require the documented 204 response before
+            //    treating the deletion as accepted.
+            let deleteResponse;
             try {
-              await github.rest.packages.deletePackageForOrganization({
-                org: owner,
-                package_type: packageType,
-                package_name: expectedName,
-              });
+              deleteResponse = await github.request(
+                'DELETE /orgs/{org}/packages/{package_type}/{package_name}',
+                { org: owner, package_type: packageType, package_name: expectedName },
+              );
             } catch (error) {
               failWith('package DELETE failed', error);
+              return;
+            }
+            if (deleteResponse.status !== 204) {
+              core.setFailed(`package DELETE returned status=${deleteResponse.status}, expected 204`);
               return;
             }
             core.info(`DELETE accepted (204) for "${expectedName}" (id=${meta.id})`);
