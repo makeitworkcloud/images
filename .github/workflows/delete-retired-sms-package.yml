@@ -37,14 +37,27 @@ jobs:
             const expectedRepo = 'makeitworkcloud/images';
             const expectedName = 'opencode-sms-bridge';
             const packageType = 'container';
-            // Multi-segment container names must be URL-encoded in the API
-            // path; octokit does not encode path parameters itself.
-            const encodedName = encodeURIComponent(expectedName);
 
             // Fail-closed guard mirroring the job-level condition.
             const repoFull = `${context.repo.owner}/${context.repo.repo}`;
             if (repoFull !== expectedRepo || context.ref !== 'refs/heads/main') {
               core.setFailed(`refusing: ${repoFull}@${context.ref} is not ${expectedRepo}@refs/heads/main`);
+              return;
+            }
+
+            // 0) Pre-request self-check BEFORE any API call: structured REST
+            //    methods encode route parameters themselves (octokit
+            //    endpoint.js url-template applies encodeURIComponent to
+            //    simple {name} placeholders), so the raw name must build a
+            //    URL with the slashed name encoded exactly once.
+            const route = github.request.endpoint(
+              'GET /orgs/{org}/packages/{package_type}/{package_name}',
+              { org: owner, package_type: packageType, package_name: expectedName },
+            );
+            const expectedPath = `/orgs/${owner}/packages/${packageType}/${encodeURIComponent(expectedName)}`;
+            const builtPath = new URL(route.url).pathname;
+            if (builtPath !== expectedPath) {
+              core.setFailed(`route encoding check failed: ${builtPath} != ${expectedPath}`);
               return;
             }
 
@@ -70,7 +83,7 @@ jobs:
               await github.rest.packages.getPackageForOrganization({
                 org: owner,
                 package_type: packageType,
-                package_name: encodedName,
+                package_name: expectedName,
               })
             ).data;
             const repoLabel = meta.repository ? meta.repository.full_name : 'none';
@@ -92,7 +105,7 @@ jobs:
             // 3) Count real versions from the API before deleting.
             const versions = await github.paginate(
               github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg,
-              { org: owner, package_type: packageType, package_name: encodedName, per_page: 100 },
+              { org: owner, package_type: packageType, package_name: expectedName, per_page: 100 },
             );
             core.info(`versions present: ${versions.length} (sample id=${versions.length > 0 ? versions[0].id : 'none'})`);
 
@@ -100,7 +113,7 @@ jobs:
             await github.rest.packages.deletePackageForOrganization({
               org: owner,
               package_type: packageType,
-              package_name: encodedName,
+              package_name: expectedName,
             });
             core.info(`DELETE accepted for "${expectedName}" (id=${meta.id})`);
 
@@ -110,7 +123,7 @@ jobs:
               await github.rest.packages.getPackageForOrganization({
                 org: owner,
                 package_type: packageType,
-                package_name: encodedName,
+                package_name: expectedName,
               });
               core.setFailed('package is still readable after deletion');
               return;
