@@ -3,8 +3,6 @@
 SHELL := /bin/bash
 
 IMAGES := $(shell find . -maxdepth 2 -name Containerfile -printf '%h\n' | cut -d'/' -f2 | sort -u)
-RETIRED_IMAGES := opencode-sms-bridge
-IMAGES := $(filter-out $(RETIRED_IMAGES),$(IMAGES))
 
 help:
 	@echo "Available targets:"
