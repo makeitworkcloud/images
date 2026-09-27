@@ -403,21 +403,24 @@ class RetainedTransferTests(unittest.TestCase):
             self.server.remove_artifact("deck.pptx", expected["sha256"])
         self.connect.assert_not_called()
 
-    def test_remove_refuses_replaced_name_after_hashing(self):
+    def test_remove_refuses_replacement_or_in_place_change_after_hashing(self):
         destination = self.root / "deck.pptx"
-        destination.write_bytes(BODY)
         read_metadata = self.server.read_metadata
+        for replace in (False, True):
+            destination.write_bytes(BODY)
 
-        def replace_after_hash(handle):
-            metadata = read_metadata(handle)
-            destination.unlink()
-            destination.write_bytes(b"replacement")
-            return metadata
+            def change_after_hash(handle):
+                metadata = read_metadata(handle)
+                if replace:
+                    destination.unlink()
+                destination.write_bytes(b"replacement")
+                return metadata
 
-        with mock.patch.object(self.server, "read_metadata", side_effect=replace_after_hash):
-            with self.assertRaises(self.server.TransferError):
-                self.server.remove_artifact("deck.pptx", hashlib.sha256(BODY).hexdigest())
-        self.assertEqual(destination.read_bytes(), b"replacement")
+            with self.subTest(replace=replace):
+                with mock.patch.object(self.server, "read_metadata", side_effect=change_after_hash):
+                    with self.assertRaises(self.server.TransferError):
+                        self.server.remove_artifact("deck.pptx", hashlib.sha256(BODY).hexdigest())
+                self.assertEqual(destination.read_bytes(), b"replacement")
 
 
 if __name__ == "__main__":

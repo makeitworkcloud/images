@@ -335,11 +335,13 @@ def remove_artifact(artifact: str, expected_sha256: str) -> dict:
     if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
         raise TransferError("expected_sha256 must be a SHA-256 hex digest")
     with artifact_parent(artifact) as (parent, name), artifact_file(parent, name) as source:
+        before = file_state(os.fstat(source.fileno()))
         metadata = read_metadata(source)
         if metadata["sha256"] != expected_sha256.lower():
             raise TransferError("artifact SHA-256 does not match; nothing was removed")
-        if file_state(os.fstat(source.fileno())) != file_state(
-            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            before != file_state(os.fstat(source.fileno()))
+            or before != file_state(os.stat(name, dir_fd=parent, follow_symlinks=False))
         ):
             raise TransferError("artifact changed before removal; nothing was removed")
         os.unlink(name, dir_fd=parent)
