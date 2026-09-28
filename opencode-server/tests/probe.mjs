@@ -59,10 +59,16 @@ if (mode === "security") {
   console.log("PROBE_OK");
 } else if (mode === "metadata") {
   const packages = ["bash", "ca-certificates", "gcompat", "git", "libgcc", "libstdc++", "nodejs", "ripgrep"];
+  // apk-list(8) defines --manifest as installed <name> <version> pairs.
+  const rows = execFileSync("apk", ["list", "--installed", "--manifest", ...packages],
+    { encoding: "utf8" }).trim().split("\n").map((line) => line.trim().split(/\s+/));
+  assert(rows.every(([name, version, extra]) => packages.includes(name) && version && !extra));
+  assert.equal(rows.length, packages.length);
+  assert.equal(new Set(rows.map(([name]) => name)).size, packages.length);
   console.log(JSON.stringify({
     alpine: fs.readFileSync("/etc/alpine-release", "utf8").trim(),
     node: process.versions.node,
-    apk: execFileSync("apk", ["info", "-v", ...packages], { encoding: "utf8" }).trim().split("\n"),
+    apk: Object.fromEntries(rows),
   }));
 } else if (mode === "cache") {
   const plugins = {};

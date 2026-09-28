@@ -36,6 +36,7 @@ DEADLINE = time.monotonic() + 25 * 60
 METRICS = {}
 STAGE = "preflight"
 DETAILS = []
+REQUEST_ERROR = None
 CREATED_VOLUMES = []
 TESTS = str(Path(__file__).resolve().parent)
 ENV = [
@@ -121,21 +122,29 @@ def elapsed(name, start):
 
 
 def request(container, port, route, post=None, timeout=30):
-    args = ["exec", container, "wget", "-qO-", "-T", str(timeout),
-            "--header", "x-opencode-directory: " + HOME]
+    global REQUEST_ERROR
+    REQUEST_ERROR = {"route": ("POST " if post is not None else "GET ") + route.split("?")[0],
+                     "http_status": None, "source": "client_process"}
+    headers = {"x-opencode-directory": HOME}
     if port == 4747:
-        args += ["--header", "Authorization: Bearer " + TOKEN]
+        headers["Authorization"] = "Bearer " + TOKEN
     if post is not None:
-        args += ["--header", "Content-Type: application/json", "--post-data", json.dumps(post)]
-    args += ["http://127.0.0.1:%d%s" % (port, route)]
-    result = run(args, timeout=timeout + 10, check=False)
-    if result.returncode:
-        DETAILS.append(result.stderr)
-        return None
+        headers["Content-Type"] = "application/json"
+    result = run(["exec", "-i", container, "node", "/probe/http.mjs"], timeout=timeout + 10,
+                 input_text=json.dumps({"port": port, "route": route, "post": post,
+                                        "headers": headers, "timeout": timeout}))
     try:
-        return json.loads(result.stdout)
-    except ValueError:
+        response = json.loads(result.stdout)
+        status = response["status"]
+        payload = response["body"]
+        REQUEST_ERROR = response["diagnostic"]
+    except (ValueError, KeyError, TypeError):
+        raise Failure("request helper returned invalid envelope", operation="loopback HTTP request") from None
+    if REQUEST_ERROR is not None:
+        DETAILS.append(json.dumps(REQUEST_ERROR))
+    if not isinstance(status, int) or not 200 <= status < 300:
         return None
+    return payload
 
 
 def wait_json(container, port, route, accept, window=300):
@@ -214,7 +223,6 @@ def ready(name):
 def recall(name, memory_id):
     payload = request(name, 4747, "/api/search?q=" + quote(SENTENCE) + "&tag=" + TAG + "&pageSize=20", timeout=180)
     if not isinstance(payload, dict) or payload.get("success") is not True:
-        DETAILS.append(json.dumps(payload))
         raise Failure("memory search failed")
     hits = [item for item in (payload.get("data") or {}).get("items", [])
             if item.get("type") == "memory" and item.get("id") == memory_id]
@@ -277,7 +285,6 @@ def main():
         first = phase("first local embedding write")
         payload = request(name, 4747, "/api/memories", {"content": SENTENCE, "containerTag": TAG}, timeout=300)
         if not isinstance(payload, dict) or payload.get("success") is not True:
-            DETAILS.append(json.dumps(payload))
             raise Failure("first memory write failed; no compatibility fallback")
         memory_id = (payload.get("data") or {}).get("id")
         if not isinstance(memory_id, str) or not memory_id:
@@ -319,6 +326,8 @@ def main():
         # Only Failure messages are our fixed strings, never arbitrary exception text.
         evidence["failed_phase"] = STAGE
         evidence["failure_type"] = type(error).__name__
+        if REQUEST_ERROR is not None:
+            evidence["request_error"] = REQUEST_ERROR
         if isinstance(error, Failure):
             evidence["reason"] = str(error)
             if error.operation is not None:

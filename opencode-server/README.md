@@ -114,9 +114,27 @@ write, warm config/plugin-ready, warm recall, and total warm-to-recall seconds.
 Startup timing includes the effective-security probe. Memory starts background
 warmup at plugin initialization: first-write timing includes any remaining
 warmup and is NOT an isolated model-load benchmark. The report contains only
-image/runtime identity, apk versions, timings, cache fingerprints/counts,
-similarity, the synthetic marker and fixed failure classifications.
-No config/auth files, raw subprocess errors or container logs are printed.
+image/runtime identity, installed apk versions, timings, cache fingerprints/
+counts, similarity, the synthetic marker and bounded failure diagnostics.
+Installed versions come from `apk list --installed --manifest`, documented
+as `<name> <version>` pairs; descriptions and repository candidates are not
+accepted as version evidence.
+
+Loopback requests use Node's native `fetch` with the existing per-call timeout
+and global deadline. The helper retains HTTP status and JSON bodies up to
+1 MiB even on non-2xx responses. Only memory API error name/message/code/status
+fields and up to six exposed error/cause records are included in diagnostics;
+client transport failures retain the same fields from the fetch error chain.
+Each printed field is bounded to 768 characters after URL, credential, query
+and path redaction. Response/config bodies, headers, auth and raw container
+logs are not dumped. Non-JSON/oversized responses report flags, not raw text.
+Fixed categories distinguish native-loader, missing-package, TLS, DNS,
+connection, model-download/remote-HTTP and timeout evidence. Categories are
+matched symptoms, not a root-cause verdict. Upstream may flatten its exception
+to a string and omit causes; the probe cannot reconstruct an unexposed chain.
+The failing route label excludes query parameters. No retries are added to
+the memory write and no inference, model or timeout settings are relaxed.
+
 Image inspection consumes Podman's documented JSON array and retains only
 ID, architecture, OS and entrypoint. Checked command failures identify the
 operation and return code without arguments. Image-inspect stderr is scanned
