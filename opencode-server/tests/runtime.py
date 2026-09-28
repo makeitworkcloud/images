@@ -65,23 +65,46 @@ MEMORY = {
 
 
 class Failure(Exception):
-    pass
+    def __init__(self, message, *, operation=None, diagnostic=None):
+        super().__init__(message)
+        self.operation = operation
+        self.diagnostic = diagnostic
 
 
 def run(args, timeout=60, check=True, cleanup=False, input_text=None):
+    operation = "podman " + " ".join(args[:2] if args[0] in ("image", "volume", "container") else args[:1])
     remaining = timeout if cleanup else min(timeout, DEADLINE - time.monotonic())
     if remaining <= 0:
-        raise Failure("deadline exhausted")
+        raise Failure("deadline exhausted", operation=operation)
     try:
         result = subprocess.run(["podman", *args], input=input_text, capture_output=True,
                                 text=True, timeout=remaining)
     except subprocess.TimeoutExpired:
-        raise Failure("subprocess timeout") from None
+        raise Failure("subprocess timeout", operation=operation) from None
     except OSError:
-        raise Failure("could not start container command") from None
+        raise Failure("could not start container command", operation=operation) from None
     if result.returncode and check:
         DETAILS.append(result.stderr)
-        raise Failure("container command failed (rc=%d)" % result.returncode)
+        diagnostic = {"returncode": result.returncode}
+        if args[:2] == ["image", "inspect"]:
+            # Emit only fixed vocabulary, never stderr lines, argv, paths or inspect JSON.
+            allowlist = {
+                "template": ("template:", "can't evaluate field", 'function "json" not defined', "executing template"),
+                "image_reference": ("no such image", "image not known", "image not found", "invalid reference format", "short-name"),
+                "storage": ("storage", "database", "graphroot", "runroot", "overlay", "mount program", "db configuration mismatch"),
+                "permission": ("permission denied", "operation not permitted"),
+                "runtime": ("cannot clone", "cannot re-exec", "user namespace", "newuidmap", "newgidmap"),
+            }
+            sample = result.stderr[:8192].lower()
+            matches = {category: [phrase for phrase in phrases if phrase in sample]
+                       for category, phrases in allowlist.items()}
+            diagnostic.update({
+                "stderr_matches": {category: phrases for category, phrases in matches.items() if phrases},
+                "stderr_present": bool(result.stderr),
+                "stderr_scan_truncated": len(result.stderr) > 8192,
+            })
+        raise Failure("container command failed (rc=%d)" % result.returncode,
+                      operation=operation, diagnostic=diagnostic)
     return result
 
 
@@ -212,21 +235,37 @@ def main():
         if len(sys.argv) != 2:
             raise Failure("exact locally built image argument required")
         image = sys.argv[1]
-        identity = json.loads(run(["image", "inspect", "--format",
-            '{"id":{{json .Id}},"arch":{{json .Architecture}},"os":{{json .Os}},"entrypoint":{{json .Config.Entrypoint}}}',
-            image]).stdout)
+        phase("preflight: podman image inspect")
+        inspected = run(["image", "inspect", image])
+        try:
+            records = json.loads(inspected.stdout)
+            if not isinstance(records, list) or len(records) != 1:
+                raise ValueError
+            record = records[0]
+            identity = {"id": record["Id"], "arch": record["Architecture"],
+                        "os": record["Os"], "entrypoint": record["Config"]["Entrypoint"]}
+        except (ValueError, KeyError, TypeError):
+            raise Failure("image inspect returned unexpected JSON structure",
+                          operation="podman image inspect") from None
+        if not isinstance(identity["id"], str) or not identity["id"]:
+            raise Failure("image inspect returned no image ID", operation="podman image inspect")
         if identity["arch"] != "amd64" or identity["os"] != "linux" or identity["entrypoint"] != ["opencode"]:
             raise Failure("image platform or inherited entrypoint mismatch")
         evidence["image"] = identity
+        del records, record, inspected
         # All subsequent containers use this immutable local image ID, not a mutable tag.
         image = identity["id"]
+        phase("preflight: create HOME volume")
         CREATED_VOLUMES.append(VOLUME)
         run(["volume", "create", VOLUME])
+        phase("preflight: prepare cold volumes")
         mounts = prepare(image, 0)
         helper = ["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
                   *HARDEN, "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
                   "--entrypoint=node", image, "/probe/probe.mjs"]
+        phase("preflight: verify empty caches")
         run([*helper, "empty"])
+        phase("preflight: runtime metadata")
         evidence["runtime"] = json.loads(run([*helper, "metadata"]).stdout)
         cold = phase("cold startup and automatic pinned plugin installation")
         name = start(image, 0, mounts)
@@ -282,6 +321,10 @@ def main():
         evidence["failure_type"] = type(error).__name__
         if isinstance(error, Failure):
             evidence["reason"] = str(error)
+            if error.operation is not None:
+                evidence["failed_operation"] = error.operation
+            if error.diagnostic is not None:
+                evidence["command_diagnostic"] = error.diagnostic
         for name in CONTAINERS:
             try:
                 logs = run(["logs", "--tail=100", name], check=False, cleanup=True, timeout=15)

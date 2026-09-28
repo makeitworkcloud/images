@@ -18,16 +18,14 @@ glibc graft. UID/GID 1000 and HOME `/home/opencode` are the runtime defaults.
 `CONTEXT_MODE_DIR=/home/opencode/.local/share/context-mode` avoids the masked
 config directory. Runtime rootfs can be read-only with writable HOME and /tmp.
 
-Upstream's Dockerfile says `FROM alpine`, not a release number. The exact
-Alpine release inside the pinned digest has NOT been inspected by executing
-it during authoring. The CI report reads `/etc/alpine-release` and resolved
-apk versions from the actual built image; review those before promotion.
-The official Alpine 3.24 source branch currently defines Node 24.18.1 and
-gcompat 1.1.0-r4, including the x86_64 `ld-linux-x86-64.so.2` loader. Those
-source observations are NOT claims about the digest's installed packages or
-proof that gcompat implements every ONNX-required glibc symbol. The build
-uses only the pinned base's existing repositories and stops if unavailable.
-No exact apk revisions are fabricated or pinned; rebuilding is not hermetic.
+Upstream's Dockerfile says `FROM alpine`, not a release number. Do not infer
+the exact Alpine release from the OpenCode tag. Review `/etc/alpine-release`
+and resolved apk versions in the actual image's CI report before promotion.
+Official Alpine gcompat provides the x86_64 `ld-linux-x86-64.so.2` loader;
+loader presence and successful apk installation do not prove that every
+ONNX-required glibc symbol is implemented. The build uses only the pinned
+base's existing repositories and stops if unavailable. No exact apk revisions
+are fabricated or pinned; rebuilding is not hermetic.
 
 Standalone Bun is deliberately absent: `community/bun/APKBUILD` was not found
 on the official 3.24 stable source branch. No complex alternate installer is
@@ -42,7 +40,7 @@ not activate anything. An externally managed config must explicitly opt in.
 Only the disposable CI fixture enables `context-mode@1.0.169` and
 `opencode-mem@2.26.0`, both as native OpenCode plugins, with no duplicate MCP.
 OpenCode's existing npm/Arborist loader automatically resolves these exact
- top-level versions into `$HOME/.cache/opencode/packages/<spec>/node_modules`.
+top-level versions into `$HOME/.cache/opencode/packages/<spec>/node_modules`.
 Lifecycle scripts are disabled by that upstream loader. No startup apk,
 external npm install, custom entrypoint, or manual dependency fix is added.
 
@@ -119,6 +117,13 @@ warmup and is NOT an isolated model-load benchmark. The report contains only
 image/runtime identity, apk versions, timings, cache fingerprints/counts,
 similarity, the synthetic marker and fixed failure classifications.
 No config/auth files, raw subprocess errors or container logs are printed.
+Image inspection consumes Podman's documented JSON array and retains only
+ID, architecture, OS and entrypoint. Checked command failures identify the
+operation and return code without arguments. Image-inspect stderr is scanned
+only for a fixed allowlist of template, image-reference, storage, permission
+and runtime phrases within its first 8192 characters. Reports include those
+fixed matches plus presence/truncation flags, not raw stderr or paths. Empty
+matches mean unclassified, not a successful preflight or native compatibility.
 A native-load suspicion flag is informational, not a diagnosis; every failed
 assertion blocks the gate regardless of classification.
 
@@ -164,14 +169,15 @@ SQLite adapter and plugin tests; opencode-mem release
 `0c8ed7d54382d9225def8484d691182d46e8552d` manifest, config, embedding backend,
 and plugin entry/index. Context probes do not configure an MCP server.
 
-Repository edits performed through GitHub MCP only. No local validation, CI
-run, PR creation, dispatch/rerun, publication, merge, chart change or rollout
-was performed. A local review packet is documentation, not executed validation.
-Parent reviews this branch and opens the PR. Review native
-hadolint/actionlint/pre-commit and the runtime build matrix result in that PR.
-Inspect the actual Alpine/apk identity, failure phase, cold/warm timings,
-cache reuse, and same-id recall evidence. No performance thresholds are
-asserted beyond bounded deadlines; acceptability requires human review.
+Validate changes through normal pull-request CI. Review the native
+hadolint/actionlint/pre-commit checks and the separate image build/runtime
+job; the checks-job comment reports pre-commit only, not aggregate success.
+Review packets and source inspection are not executed validation evidence.
+Inspect the actual Alpine/apk identity, failure phase/operation, cold/warm
+timings, cache reuse, and same-id recall evidence. A successful image build
+alone proves neither plugin startup nor local embeddings. No performance
+thresholds are asserted beyond bounded deadlines; acceptability requires
+human review.
 
 Any native compatibility, missing package, installation or offline-reuse
 failure stops advancement. Do not add an alternate base, custom ONNX,
