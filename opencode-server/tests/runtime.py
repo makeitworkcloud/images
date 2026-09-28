@@ -75,6 +75,8 @@ def run(args, timeout=60, check=True, cleanup=False, input_text=None):
                                 text=True, timeout=remaining)
     except subprocess.TimeoutExpired:
         raise Failure("subprocess timeout") from None
+    except OSError:
+        raise Failure("could not start container command") from None
     if result.returncode and check:
         DETAILS.append(result.stderr)
         raise Failure("container command failed (rc=%d)" % result.returncode)
@@ -141,18 +143,19 @@ def config_present(data):
 
 def prepare(image, index):
     config_volume = CONFIG_VOLUMES[index]
-    run(["volume", "create", config_volume])
     CREATED_VOLUMES.append(config_volume)
+    run(["volume", "create", config_volume])
     mounts = ["-v", VOLUME + ":" + HOME, "-v", config_volume + ":" + CONFIG]
-    # The only root process repairs ownership on our fresh volumes (fsGroup analogue).
-    # Runtime and config seeding then run as uid/gid 1000; never mutate host paths.
+    # CHOWN cannot bypass uid-1000 directory permissions. Only visit fresh
+    # copy-up trees; never traverse private caches during warm replacement.
     run(["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
          *HARDEN, "--user=0:0", "--cap-add=CHOWN", *mounts,
          "--entrypoint=/bin/sh", image, "-ec",
-         "mkdir -p " + HOME + "/.cache " + HOME + "/.local/share/context-mode "
-         + HOME + "/.local/state; chown -R 1000:1000 " + HOME], timeout=120)
+         "chown -R 1000:1000 " + (HOME if index == 0 else CONFIG)], timeout=120)
     seed = (
         "const fs=require('node:fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));"
+        "for(const dir of ['.cache','.local/share/context-mode','.local/state'])"
+        "fs.mkdirSync('/home/opencode/'+dir,{recursive:true});"
         "for(const [name,value] of Object.entries(data))"
         "fs.writeFileSync('/home/opencode/.config/opencode/'+name,JSON.stringify(value));"
     )
@@ -214,18 +217,19 @@ def main():
         evidence["image"] = identity
         # All subsequent containers use this immutable local image ID, not a mutable tag.
         image = identity["id"]
-        run(["volume", "create", VOLUME])
         CREATED_VOLUMES.append(VOLUME)
+        run(["volume", "create", VOLUME])
         mounts = prepare(image, 0)
-        run(["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
-             *HARDEN, "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
-             "--entrypoint=node", image, "/probe/probe.mjs", "empty"])
+        helper = ["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
+                  *HARDEN, "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
+                  "--entrypoint=node", image, "/probe/probe.mjs"]
+        run([*helper, "empty"])
+        evidence["runtime"] = json.loads(run([*helper, "metadata"]).stdout)
         cold = phase("cold startup and automatic pinned plugin installation")
         name = start(image, 0, mounts)
         elapsed("cold_config_seconds", cold)
         ready(name)
         elapsed("cold_plugin_ready_seconds", cold)
-        evidence["runtime"] = probe(name, "metadata")
         # Plugin startup begins background warmup. Write latency includes any remaining warmup.
         first = phase("first local embedding write")
         payload = request(name, 4747, "/api/memories", {"content": SENTENCE, "containerTag": TAG}, timeout=300)
@@ -265,10 +269,12 @@ def main():
             raise Failure("plugin lock/manifest or model cache changed during offline replacement")
         evidence["offline_cache_reused"] = True
         status, exit_code = "PASS", 0
-    except (Failure, ValueError, KeyError, OSError) as error:
-        # Never print arbitrary subprocess responses, config/auth files, or container logs.
+    except (Failure, ValueError, KeyError, OSError, TypeError, AttributeError) as error:
+        # Only Failure messages are our fixed strings, never arbitrary exception text.
         evidence["failed_phase"] = STAGE
         evidence["failure_type"] = type(error).__name__
+        if isinstance(error, Failure):
+            evidence["reason"] = str(error)
         for name in CONTAINERS:
             try:
                 logs = run(["logs", "--tail=100", name], check=False, cleanup=True, timeout=15)
@@ -295,7 +301,11 @@ def main():
                 cleanup_ok = False
         for volume in reversed(CREATED_VOLUMES):
             try:
-                run(["volume", "rm", volume], cleanup=True, timeout=30)
+                exists = run(["volume", "exists", volume], check=False, cleanup=True, timeout=15)
+                if exists.returncode == 0:
+                    run(["volume", "rm", volume], cleanup=True, timeout=30)
+                elif exists.returncode != 1:
+                    cleanup_ok = False
             except Failure:
                 cleanup_ok = False
         if not cleanup_ok:

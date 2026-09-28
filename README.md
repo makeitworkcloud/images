@@ -44,7 +44,7 @@ publish images or attestations.
 `tfroot-runner/pre-commit-config.yaml` is the **canonical pre-commit configuration** for every `tfroot-*` repository and `terraform-libvirt-domain`. It is:
 
 1. Pre-cached into the runner image at build time so hooks don't re-fetch on every CI run
-2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows` fetches it at CI time
+2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows`
 
 To change these hooks, edit this file and merge it first. Downstream `make test` runs refresh the ignored generated configuration from this source.
 
