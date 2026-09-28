@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Synthetic CI-only adaptation of charts PR 113 at a34d8ef1646470c5d24275660c72d314f63b617b.
+
+Retains its real memory API write/search/id/content/similarity contract. Uses
+Podman's local Buildah store, never pulls a replacement image. No host ports,
+credentials, provider calls, live services, or production data. See ../README.md.
+"""
+
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+from urllib.parse import quote
+import uuid
+
+HOME = "/home/opencode"
+CONFIG = HOME + "/.config/opencode"
+SENTENCE = "The synthetic runtime probe stores amber-harbor-7f31d2 evidence."
+TAG = "opencode_project_" + hashlib.sha256(("path:" + HOME).encode()).hexdigest()[:16]
+TOKEN = "ci-fixture-not-a-secret"  # Public fixture, not a credential.
+PLUGINS = ["context-mode@1.0.169", "opencode-mem@2.26.0"]
+TOOLS = {"memory", "ctx_execute", "ctx_batch_execute", "ctx_index", "ctx_search", "ctx_stats"}
+PREFIX = "opencode-runtime-ci-" + uuid.uuid4().hex
+VOLUME = PREFIX + "-home"
+CONTAINERS = [PREFIX + "-cold", PREFIX + "-warm"]
+CONFIG_VOLUMES = [PREFIX + "-config-cold", PREFIX + "-config-warm"]
+PREP = PREFIX + "-prepare"
+DEADLINE = time.monotonic() + 25 * 60
+METRICS = {}
+STAGE = "preflight"
+DETAILS = []
+CREATED_VOLUMES = []
+TESTS = str(Path(__file__).resolve().parent)
+ENV = [
+    "-e", "HOME=" + HOME,
+    "-e", "XDG_CONFIG_HOME=" + HOME + "/.config",
+    "-e", "XDG_CACHE_HOME=" + HOME + "/.cache",
+    "-e", "XDG_DATA_HOME=" + HOME + "/.local/share",
+    "-e", "XDG_STATE_HOME=" + HOME + "/.local/state",
+    "-e", "CONTEXT_MODE_DIR=" + HOME + "/.local/share/context-mode",
+]
+HARDEN = [
+    "--read-only", "--read-only-tmpfs=false", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges", "--tmpfs=/tmp:rw,size=512m,mode=1777",
+]
+OPENCODE = {"plugin": PLUGINS, "enabled_providers": [], "permission": {"*": "deny"}, "mcp": {}}
+MEMORY = {
+    "storagePath": HOME + "/.opencode-mem/data",
+    "embeddingModel": "Xenova/nomic-embed-text-v1", "embeddingDimensions": 768,
+    "embeddingUseTaskPrefixes": True,
+    "autoCaptureEnabled": False, "autoCleanupEnabled": False, "injectProfile": False,
+    "userProfileAutoCleanupEnabled": False, "userProfileValidationEnabled": False,
+    "chatMessage": {"enabled": False}, "compaction": {"enabled": False},
+    "containerTagPrefix": "opencode", "webServerEnabled": True,
+    "webServerHost": "127.0.0.1", "webServerPort": 4747, "webServerApiToken": TOKEN,
+    "similarityThreshold": 0.6,
+}
+
+
+class Failure(Exception):
+    pass
+
+
+def run(args, timeout=60, check=True, cleanup=False, input_text=None):
+    remaining = timeout if cleanup else min(timeout, DEADLINE - time.monotonic())
+    if remaining <= 0:
+        raise Failure("deadline exhausted")
+    try:
+        result = subprocess.run(["podman", *args], input=input_text, capture_output=True,
+                                text=True, timeout=remaining)
+    except subprocess.TimeoutExpired:
+        raise Failure("subprocess timeout") from None
+    if result.returncode and check:
+        DETAILS.append(result.stderr)
+        raise Failure("container command failed (rc=%d)" % result.returncode)
+    return result
+
+
+def phase(name):
+    global STAGE
+    STAGE = name
+    print("[phase] " + name, flush=True)
+    return time.monotonic()
+
+
+def elapsed(name, start):
+    METRICS[name] = round(time.monotonic() - start, 3)
+    print("[seconds] %s=%s" % (name, METRICS[name]), flush=True)
+
+
+def request(container, port, route, post=None, timeout=30):
+    args = ["exec", container, "wget", "-qO-", "-T", str(timeout),
+            "--header", "x-opencode-directory: " + HOME]
+    if port == 4747:
+        args += ["--header", "Authorization: Bearer " + TOKEN]
+    if post is not None:
+        args += ["--header", "Content-Type: application/json", "--post-data", json.dumps(post)]
+    args += ["http://127.0.0.1:%d%s" % (port, route)]
+    result = run(args, timeout=timeout + 10, check=False)
+    if result.returncode:
+        DETAILS.append(result.stderr)
+        return None
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return None
+
+
+def wait_json(container, port, route, accept, window=300):
+    end = min(DEADLINE, time.monotonic() + window)
+    while time.monotonic() < end:
+        data = request(container, port, route, timeout=max(1, min(30, int(end - time.monotonic()))))
+        if data is not None and accept(data):
+            return data
+        state = run(["inspect", "--format", "{{.State.Status}}", container]).stdout.strip()
+        if state != "running":
+            raise Failure("container stopped before readiness")
+        time.sleep(2)
+    raise Failure("readiness deadline exhausted")
+
+
+def probe(container, mode, timeout=120):
+    result = run(["exec", container, "node", "/probe/probe.mjs", mode], timeout=timeout)
+    if mode in ("cache", "metadata"):
+        return json.loads(result.stdout)
+    if "PROBE_OK" not in result.stdout.splitlines():
+        raise Failure("probe completion marker absent")
+
+
+def config_present(data):
+    if not isinstance(data, dict):
+        return False
+    specs = [p[0] if isinstance(p, list) and p else p for p in data.get("plugin", [])]
+    return all(p in specs for p in PLUGINS) and data.get("enabled_providers") == [] and not data.get("mcp")
+
+
+def prepare(image, index):
+    config_volume = CONFIG_VOLUMES[index]
+    run(["volume", "create", config_volume])
+    CREATED_VOLUMES.append(config_volume)
+    mounts = ["-v", VOLUME + ":" + HOME, "-v", config_volume + ":" + CONFIG]
+    # The only root process repairs ownership on our fresh volumes (fsGroup analogue).
+    # Runtime and config seeding then run as uid/gid 1000; never mutate host paths.
+    run(["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
+         *HARDEN, "--user=0:0", "--cap-add=CHOWN", *mounts,
+         "--entrypoint=/bin/sh", image, "-ec",
+         "mkdir -p " + HOME + "/.cache " + HOME + "/.local/share/context-mode "
+         + HOME + "/.local/state; chown -R 1000:1000 " + HOME], timeout=120)
+    seed = (
+        "const fs=require('node:fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));"
+        "for(const [name,value] of Object.entries(data))"
+        "fs.writeFileSync('/home/opencode/.config/opencode/'+name,JSON.stringify(value));"
+    )
+    run(["run", "--rm", "-i", "--name", PREP, "--pull=never", "--network=none",
+         *HARDEN, "--user=1000:1000", *ENV, *mounts, "--entrypoint=node", image, "-e", seed],
+        input_text=json.dumps({"opencode.json": OPENCODE, "opencode-mem.jsonc": MEMORY}))
+    return mounts
+
+
+def start(image, index, mounts):
+    name = CONTAINERS[index]
+    # Preserve the inherited entrypoint; arguments match the chart's web command.
+    run(["run", "-d", "--name", name, "--pull=never", "--platform=linux/amd64",
+         "--network=" + ("bridge" if index == 0 else "none"), *HARDEN,
+         "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
+         "-w", HOME, image, "web", "--hostname", "127.0.0.1", "--port", "4096"])
+    wait_json(name, 4096, "/config", config_present, window=420)
+    return name
+
+
+def ready(name):
+    ids = wait_json(name, 4096, "/experimental/tool/ids",
+                    lambda data: isinstance(data, list) and TOOLS.issubset(set(data)))
+    if any(ids.count(tool) != 1 for tool in TOOLS):
+        raise Failure("duplicate native tool registration")
+    wait_json(name, 4747, "/api/health",
+              lambda data: isinstance(data, dict) and data.get("success") is True and data.get("status") == "ok")
+
+
+def recall(name, memory_id):
+    payload = request(name, 4747, "/api/search?q=" + quote(SENTENCE) + "&tag=" + TAG + "&pageSize=20", timeout=180)
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        DETAILS.append(json.dumps(payload))
+        raise Failure("memory search failed")
+    hits = [item for item in (payload.get("data") or {}).get("items", [])
+            if item.get("type") == "memory" and item.get("id") == memory_id]
+    if not hits or hits[0].get("content") != SENTENCE:
+        raise Failure("memory id/content not recalled")
+    similarity = hits[0].get("similarity")
+    if (isinstance(similarity, bool) or not isinstance(similarity, (float, int))
+            or not math.isfinite(similarity) or similarity < 0.6):
+        raise Failure("memory similarity must be finite and at least 0.6")
+    return similarity
+
+
+def main():
+    status = "FAIL"
+    exit_code = 1
+    evidence = {}
+    try:
+        if len(sys.argv) != 2:
+            raise Failure("exact locally built image argument required")
+        image = sys.argv[1]
+        identity = json.loads(run(["image", "inspect", "--format",
+            '{"id":{{json .Id}},"arch":{{json .Architecture}},"os":{{json .Os}},"entrypoint":{{json .Config.Entrypoint}}}',
+            image]).stdout)
+        if identity["arch"] != "amd64" or identity["os"] != "linux" or identity["entrypoint"] != ["opencode"]:
+            raise Failure("image platform or inherited entrypoint mismatch")
+        evidence["image"] = identity
+        # All subsequent containers use this immutable local image ID, not a mutable tag.
+        image = identity["id"]
+        run(["volume", "create", VOLUME])
+        CREATED_VOLUMES.append(VOLUME)
+        mounts = prepare(image, 0)
+        run(["run", "--rm", "--name", PREP, "--pull=never", "--network=none",
+             *HARDEN, "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
+             "--entrypoint=node", image, "/probe/probe.mjs", "empty"])
+        cold = phase("cold startup and automatic pinned plugin installation")
+        name = start(image, 0, mounts)
+        elapsed("cold_config_seconds", cold)
+        ready(name)
+        elapsed("cold_plugin_ready_seconds", cold)
+        evidence["runtime"] = probe(name, "metadata")
+        # Plugin startup begins background warmup. Write latency includes any remaining warmup.
+        first = phase("first local embedding write")
+        payload = request(name, 4747, "/api/memories", {"content": SENTENCE, "containerTag": TAG}, timeout=300)
+        if not isinstance(payload, dict) or payload.get("success") is not True:
+            DETAILS.append(json.dumps(payload))
+            raise Failure("first memory write failed; no compatibility fallback")
+        memory_id = (payload.get("data") or {}).get("id")
+        if not isinstance(memory_id, str) or not memory_id:
+            raise Failure("memory write returned no id")
+        elapsed("first_embedding_write_seconds", first)
+        elapsed("cold_to_first_write_seconds", cold)
+        first = phase("first local embedding recall")
+        evidence["cold_similarity"] = recall(name, memory_id)
+        elapsed("first_recall_seconds", first)
+        phase("context FTS5, native execution, and synthetic state capture")
+        probe(name, "context-cold")
+        before = probe(name, "cache", timeout=180)
+        evidence["cold_cache"] = before
+        phase("stop and replace, retain HOME but discard config volume and tmp")
+        run(["stop", "--time=30", name], timeout=60)
+        run(["rm", name])
+        run(["volume", "rm", CONFIG_VOLUMES[0]])
+        CREATED_VOLUMES.remove(CONFIG_VOLUMES[0])
+        mounts = prepare(image, 1)
+        warm = phase("warm replacement with no network")
+        name = start(image, 1, mounts)
+        elapsed("warm_config_seconds", warm)
+        ready(name)
+        elapsed("warm_plugin_ready_seconds", warm)
+        first = phase("warm local embedding recall of same id/content")
+        evidence["warm_similarity"] = recall(name, memory_id)
+        elapsed("warm_recall_seconds", first)
+        elapsed("warm_to_recall_seconds", warm)
+        probe(name, "context-warm")
+        after = probe(name, "cache", timeout=180)
+        if before != after:
+            raise Failure("plugin lock/manifest or model cache changed during offline replacement")
+        evidence["offline_cache_reused"] = True
+        status, exit_code = "PASS", 0
+    except (Failure, ValueError, KeyError, OSError) as error:
+        # Never print arbitrary subprocess responses, config/auth files, or container logs.
+        evidence["failed_phase"] = STAGE
+        evidence["failure_type"] = type(error).__name__
+        for name in CONTAINERS:
+            try:
+                logs = run(["logs", "--tail=100", name], check=False, cleanup=True, timeout=15)
+                DETAILS.extend([logs.stdout, logs.stderr])
+            except Failure:
+                pass
+        detail = "\n".join(DETAILS).lower()
+        evidence["native_load_suspected"] = any(marker in detail for marker in (
+            "dlopen", "error loading shared library", "cannot open shared object",
+            "undefined symbol", "cannot locate symbol", "ld-linux-x86-64.so.2"))
+        evidence["install_or_transport_suspected"] = any(marker in detail for marker in (
+            "eacces", "enotfound", "fetch failed", "eresolve", "timed out", "connection refused"))
+    finally:
+        # A timed-out client can leave its helper behind, so helpers are named too.
+        cleanup_ok = True
+        for name in [*CONTAINERS, PREP]:
+            try:
+                exists = run(["container", "exists", name], check=False, cleanup=True, timeout=15)
+                if exists.returncode == 0:
+                    run(["rm", "-f", name], cleanup=True, timeout=30)
+                elif exists.returncode != 1:
+                    cleanup_ok = False
+            except Failure:
+                cleanup_ok = False
+        for volume in reversed(CREATED_VOLUMES):
+            try:
+                run(["volume", "rm", volume], cleanup=True, timeout=30)
+            except Failure:
+                cleanup_ok = False
+        if not cleanup_ok:
+            status, exit_code = "FAIL", 1
+        report = {"status": status, "cleanup_ok": cleanup_ok, "seconds": METRICS, "evidence": evidence}
+        output = json.dumps(report, indent=2)
+        print(output, flush=True)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf8") as summary:
+                summary.write("## OpenCode Alpine runtime prototype\n\n```json\n" + output + "\n```\n")
+    return exit_code
+
+
+def interrupted(_signum, _frame):
+    raise Failure("interrupted")
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    sys.exit(main())

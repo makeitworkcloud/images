@@ -8,6 +8,7 @@ Container image monorepo. Each subdirectory containing a `Containerfile` is buil
 |---|---|---|
 | `agent-pipe-uploader/` | `python:3.13-alpine` | Internal MCP artifact-transfer service using caller-supplied signed URLs |
 | `gcloud-mcp/` | pinned Node 22 slim + Google Cloud CLI | Keyless, allowlist-constrained Google Cloud CLI MCP server |
+| `opencode-server/` | digest-pinned official OpenCode 1.18.29 (Alpine) | Prototype runtime prerequisites and cold/warm local-plugin CI gate; no baked plugin activation or chart rollout |
 | `tfroot-runner/` | `ghcr.io/actions/actions-runner:2.337.0` (Ubuntu) | gha-runner-scale-set runner with the OpenTofu IaC toolchain (kubectl, kustomize, sops, ansible, pre-commit, tflint, terraform-docs, infracost, checkov) |
 | `gh-cli/` | `alpine:3.24` | Minimal `gh` image for automation Jobs |
 
@@ -20,6 +21,10 @@ push to main ─▶ detect changed images ─▶ pre-commit + hadolint ─▶ bu
 `workflow_dispatch` accepts an optional `image` input to rebuild a single image; with no input it builds all images. Manual dispatch defaults to **build & push**; select **build** for a non-publishing validation run.
 
 The detect step uses the `Makefile` (`make changed-images` / `make list-images-json`) to enumerate directories that contain a `Containerfile`.
+For `opencode-server`, a scoped PR/push range check also selects the image when
+its directory or `buildah.yml` changes, including workflow-only followups.
+Its synthetic runtime gate runs after build and must pass before push. See
+[prototype scope and review requirements](opencode-server/README.md).
 
 ## Supply-chain attestations
 
@@ -39,7 +44,7 @@ publish images or attestations.
 `tfroot-runner/pre-commit-config.yaml` is the **canonical pre-commit configuration** for every `tfroot-*` repository and `terraform-libvirt-domain`. It is:
 
 1. Pre-cached into the runner image at build time so hooks don't re-fetch on every CI run
-2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows`
+2. Fetched at CI time by the shared OpenTofu workflow in `shared-workflows` fetches it at CI time
 
 To change these hooks, edit this file and merge it first. Downstream `make test` runs refresh the ignored generated configuration from this source.
 

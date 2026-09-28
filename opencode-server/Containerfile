@@ -1,0 +1,20 @@
+FROM ghcr.io/anomalyco/opencode:1.18.29@sha256:ecc3bf96ee55dad226d9cde50d79aaa8a1215c47860c0fcdc71570461bf438b8
+
+LABEL org.opencontainers.image.source="https://github.com/makeitworkcloud/images" \
+      org.opencontainers.image.description="Prototype OpenCode Alpine runtime; plugins are configured and cached at runtime"
+
+# Use only the pinned base's official repositories, without mixing Alpine releases.
+# Exact apk revisions float; CI records the resolved versions and Alpine release.
+# hadolint ignore=DL3018
+RUN apk add --no-cache bash ca-certificates gcompat git libgcc libstdc++ 'nodejs>=22.13' ripgrep \
+    && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 13)) process.exit(1); const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); db.exec("CREATE VIRTUAL TABLE probe USING fts5(content)"); db.close()' \
+    && addgroup -g 1000 opencode \
+    && adduser -D -u 1000 -G opencode -h /home/opencode opencode
+
+ENV HOME=/home/opencode \
+    CONTEXT_MODE_DIR=/home/opencode/.local/share/context-mode
+WORKDIR /home/opencode
+USER 1000:1000
+
+# Inherit upstream ENTRYPOINT ["opencode"] and runtime. No plugin activation,
+# installer, model, test fixture, Python, standalone Bun, or custom entrypoint.

@@ -101,12 +101,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Find changed images
         id: find
         env:
           INPUT_IMAGE: ${{ inputs.image }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           if [ -n "$INPUT_IMAGE" ]; then
             if ! make list-images-json | jq -e --arg img "$INPUT_IMAGE" 'index($img) != null' > /dev/null; then
@@ -117,7 +119,14 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "images=$(make list-images-json)" >> "$GITHUB_OUTPUT"
           else
-            echo "images=$(make changed-images)" >> "$GITHUB_OUTPUT"
+            images="$(make changed-images)"
+            # Keep other images' selection unchanged; include this gate on workflow-only followups.
+            base="${PR_BASE_SHA:-${PUSH_BEFORE:-HEAD~1}}"
+            changed="$(git diff --name-only "$base" HEAD -- opencode-server .github/workflows/buildah.yml)"
+            if [ -f opencode-server/Containerfile ] && [ -n "$changed" ]; then
+              images="$(jq -c '. + ["opencode-server"] | unique' <<< "$images")"
+            fi
+            echo "images=$images" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -142,6 +151,7 @@ jobs:
           sudo apt-get install -y buildah podman
 
       - name: Build image
+        id: build
         uses: redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3.1.0
         with:
           context: ${{ matrix.image }}
@@ -149,6 +159,13 @@ jobs:
           image: ${{ matrix.image }}
           tags: latest ${{ github.sha }}
           extra-args: --squash
+
+      - name: Gate OpenCode Alpine runtime
+        if: matrix.image == 'opencode-server'
+        timeout-minutes: 30
+        env:
+          BUILT_IMAGE: ${{ steps.build.outputs.image-with-tag }}
+        run: python3 opencode-server/tests/runtime.py "$BUILT_IMAGE"
 
       - name: Push to registry
         # Auto-deploy on push to main; for workflow_dispatch the user picks
