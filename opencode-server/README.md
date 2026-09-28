@@ -42,7 +42,7 @@ not activate anything. An externally managed config must explicitly opt in.
 Only the disposable CI fixture enables `context-mode@1.0.169` and
 `opencode-mem@2.26.0`, both as native OpenCode plugins, with no duplicate MCP.
 OpenCode's existing npm/Arborist loader automatically resolves these exact
-top-level versions into `$HOME/.cache/opencode/packages/<spec>/node_modules`.
+ top-level versions into `$HOME/.cache/opencode/packages/<spec>/node_modules`.
 Lifecycle scripts are disabled by that upstream loader. No startup apk,
 external npm install, custom entrypoint, or manual dependency fix is added.
 
@@ -86,15 +86,22 @@ The gate requires:
    read-only root, dropped capabilities, no-new-privileges, tmpfs /tmp,
    loopback listeners and no published host ports. A named root helper with
    only CHOWN prepares test-owned volume permissions; it is not the server.
+   Both running servers are probed for effective UID/GID 1000 in the probe
+   and PID 1, zero effective capabilities, no-new-privileges, and an actual
+   read-only root mount. A rootfs write must fail; HOME/config/cache/data/
+   state/context-state and /tmp must allow a write/read/delete round trip.
 2. Both exact plugin specs in `/config`, and each required native tool once
    in `/experimental/tool/ids`, including memory and context execution/search.
 3. Real memory `POST /api/memories`, then `/api/search?q=...&tag=...`, matching
    the created id, byte-equal content, and finite similarity >=0.6. This runs
    local CPU embeddings under the actual compiled OpenCode host.
-4. Context-mode built-in SQLite FTS5, native shell execution, indexed tool
-   search, and synthetic read/compaction state. This complementary probe
-   directly imports the installed plugin under Node; it does NOT prove
-   context tool invocation through an LLM or OpenCode's embedded runtime.
+4. Direct Node context-mode SQLite FTS5, shell execution, indexed tool
+   search, and synthetic capture/compaction state. The host generates one
+   UUID-derived marker and passes it to both probes. Only the cold probe
+   calls the capture hook. Warm verifies exactly one persisted user_prompt
+   event with byte-equal marker data BEFORE any compaction or tool execution;
+   it never regenerates that event. Compaction must also include the marker.
+   These are direct installed-plugin checks, NOT OpenCode host invocation.
 5. Stop/remove the cold server, discard config and /tmp, then start the SAME
    image and HOME with freshly seeded config and `--network=none`. Recall
    must return the same memory id/content/similarity contract. Context state
@@ -106,13 +113,32 @@ The gate requires:
 
 Reports cold config/plugin-ready, first write, first recall, total cold-to-
 write, warm config/plugin-ready, warm recall, and total warm-to-recall seconds.
-Memory starts background warmup at plugin initialization: first-write timing
-includes any remaining warmup and is NOT an isolated model-load benchmark.
-The report contains only image/runtime identity, apk versions, timings,
-cache fingerprints/counts, similarity and fixed failure classifications.
+Startup timing includes the effective-security probe. Memory starts background
+warmup at plugin initialization: first-write timing includes any remaining
+warmup and is NOT an isolated model-load benchmark. The report contains only
+image/runtime identity, apk versions, timings, cache fingerprints/counts,
+similarity, the synthetic marker and fixed failure classifications.
 No config/auth files, raw subprocess errors or container logs are printed.
 A native-load suspicion flag is informational, not a diagnosis; every failed
 assertion blocks the gate regardless of classification.
+
+## Host Invocation Gap
+
+OpenCode v1.18.29's inspected experimental API exposes GET tool IDs and tool
+schemas, not an arbitrary registered-plugin execute endpoint. The inspected
+session API has POST `/session/:sessionID/shell`; its `shellImpl` spawns a
+shell and calls `shell.env`, not the registered `ctx_*` tool implementation
+or `tool.execute.before/after` hooks. Session prompt/command surfaces are not
+a verified provider-free substitute for arbitrary context-tool invocation.
+No supported non-LLM context-tool invocation surface was verified in these
+routes. No provider or custom host bridge is added to work around this gap.
+
+A PASS is limited to host registration, the memory plugin's real local API
+path, direct Node context functionality/persistence, and container/cache
+assertions. Context execution through OpenCode's compiled host, its schema
+handling, permission enforcement, and tool before/after integration remain
+OUTSTANDING even if this prototype gate passes. The report always labels
+`context_host_invocation` as outstanding; registration alone is not execution.
 
 No providers are enabled, permissions default to deny, extraction/capture,
 profile learning/cleanup and memory chat/compaction injection are disabled.
@@ -132,15 +158,16 @@ loader; search/replacement were not reached. It is not a passing baseline.
 This repository owns the new image and adapted tests.
 
 Source contracts reviewed: OpenCode v1.18.29 Dockerfile, core npm/global,
-plugin loader/registry and experimental tool API; context-mode release
+plugin loader/registry and experimental/session tool APIs; context-mode release
 `589d8214d56740a28b5f7bf63167743d586b0b40` package manifest, native adapter,
 SQLite adapter and plugin tests; opencode-mem release
 `0c8ed7d54382d9225def8484d691182d46e8552d` manifest, config, embedding backend,
 and plugin entry/index. Context probes do not configure an MCP server.
 
-Authoring performed through GitHub MCP only. No local validation, CI run,
-PR creation, dispatch/rerun, publication, merge, chart change or rollout was
-performed. Parent reviews this branch and opens the PR. Review native
+Repository edits performed through GitHub MCP only. No local validation, CI
+run, PR creation, dispatch/rerun, publication, merge, chart change or rollout
+was performed. A local review packet is documentation, not executed validation.
+Parent reviews this branch and opens the PR. Review native
 hadolint/actionlint/pre-commit and the runtime build matrix result in that PR.
 Inspect the actual Alpine/apk identity, failure phase, cold/warm timings,
 cache reuse, and same-id recall evidence. No performance thresholds are

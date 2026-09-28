@@ -11,8 +11,49 @@ const cache = `${home}/.cache/opencode/packages`;
 const specs = { "context-mode": "1.0.169", "opencode-mem": "2.26.0" };
 const root = (name) => `${cache}/${name}@${specs[name]}/node_modules/${name}`;
 const mode = process.argv[2];
+const marker = process.argv[3];
 
-if (mode === "empty") {
+if (mode === "security") {
+  assert.match(marker, /^ci-cold-[a-f0-9]{32}$/);
+  assert.equal(process.geteuid(), 1000);
+  assert.equal(process.getegid(), 1000);
+  for (const pid of ["self", "1"]) {
+    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const fields = Object.fromEntries(status.split("\n").filter((line) => line.includes(":")).map((line) => {
+      const [key, value] = line.split(":");
+      return [key, value.trim().split(/\s+/)];
+    }));
+    assert.equal(fields.Uid[1], "1000");
+    assert.equal(fields.Gid[1], "1000");
+    assert.equal(fields.NoNewPrivs[0], "1");
+    assert.equal(BigInt("0x" + fields.CapEff[0]), 0n);
+  }
+  const mounts = fs.readFileSync("/proc/self/mountinfo", "utf8").trim().split("\n").map((line) => line.split(" "));
+  const rootMounts = mounts.filter((fields) => fields[4] === "/");
+  assert.equal(rootMounts.length, 1);
+  assert(rootMounts[0][5].split(",").includes("ro"), "effective root mount must be read-only");
+  const forbidden = `/usr/local/bin/.${marker}`;
+  let denial;
+  try {
+    fs.writeFileSync(forbidden, marker, { flag: "wx" });
+    fs.unlinkSync(forbidden);
+  } catch (error) {
+    denial = error.code;
+  }
+  // DAC can deny creation before EROFS; the mount assertion independently proves read-only.
+  assert(["EROFS", "EACCES"].includes(denial), "rootfs write must be denied");
+  for (const dir of [home, `${home}/.config/opencode`, `${home}/.cache`,
+    `${home}/.local/share`, `${home}/.local/share/context-mode`, `${home}/.local/state`, "/tmp"]) {
+    const file = `${dir}/.${marker}`;
+    fs.writeFileSync(file, marker, { flag: "wx" });
+    try {
+      assert.equal(fs.readFileSync(file, "utf8"), marker);
+    } finally {
+      fs.unlinkSync(file);
+    }
+  }
+  console.log("PROBE_OK");
+} else if (mode === "empty") {
   assert(!fs.existsSync(cache), "plugin cache must start empty");
   assert(!fs.existsSync(`${home}/.opencode-mem/data/.cache`), "model cache must start empty");
   console.log("PROBE_OK");
@@ -63,8 +104,8 @@ if (mode === "empty") {
   assert(onnxFiles > 0, "a downloaded ONNX model is required");
   console.log(JSON.stringify({ plugins, onnx: onnx.version, model: { files, bytes, sha256: digest.digest("hex") } }));
 } else if (mode === "context-cold" || mode === "context-warm") {
-  // Complement the real OpenCode registration check with a direct Node native-plugin probe.
-  // This is NOT a substitute for the memory API's embedded-runtime ONNX test.
+  // Direct Node execution is not OpenCode host tool invocation; only registration is tested there.
+  assert.match(marker, /^ci-cold-[a-f0-9]{32}$/);
   const project = `${home}/context-probe`;
   fs.mkdirSync(project, { recursive: true });
   const load = (file) => import(pathToFileURL(`${root("context-mode")}/build/${file}`).href);
@@ -81,10 +122,28 @@ if (mode === "empty") {
   const { ContextModePlugin } = await load("adapters/opencode/plugin.js");
   const plugin = await ContextModePlugin({ directory: project, client: { app: { log: async () => {} } } });
   const ctx = {
-    sessionID: "ci-context-session", messageID: "ci-message", agent: "ci",
+    sessionID: marker, messageID: "ci-message", agent: "ci",
     directory: project, worktree: project, abort: new AbortController().signal,
     metadata: () => {},
   };
+  const { SessionDB, resolveSessionDbPath } = await load("session/db.js");
+  const { OpenCodeAdapter } = await load("adapters/opencode/index.js");
+  const sessions = new SessionDB({ dbPath: resolveSessionDbPath({
+    projectDir: project, sessionsDir: new OpenCodeAdapter("opencode").getSessionDir(),
+  }) });
+  try {
+    if (mode === "context-cold") {
+      assert.equal(sessions.getEvents(ctx.sessionID).length, 0, "cold session must not preexist");
+      await plugin["chat.message"]({ sessionID: ctx.sessionID, messageID: ctx.messageID },
+        { message: {}, parts: [{ type: "text", text: marker }] });
+    }
+    // Warm checks the stored event before compaction or execution; it never calls the capture hook.
+    const captured = sessions.getEvents(ctx.sessionID).filter((event) => event.type === "user_prompt");
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].data, marker, "exact cold-only marker must survive replacement");
+  } finally {
+    sessions.close();
+  }
   for (const name of ["ctx_execute", "ctx_batch_execute", "ctx_index", "ctx_search", "ctx_stats"])
     assert.equal(typeof plugin.tool[name]?.execute, "function");
   const text = (result) => typeof result === "string" ? result : result.output;
@@ -95,16 +154,13 @@ if (mode === "empty") {
       commands: [{ label: "synthetic catalog", command: "printf 'probeanchor quartz-payload-9261\\n'" }],
       queries: ["probeanchor"], concurrency: 1,
     }, ctx);
-    await plugin["tool.execute.after"]({
-      tool: "Read", sessionID: ctx.sessionID, callID: "ci-read", args: { file_path: `${project}/synthetic.ts` },
-    }, { title: "Read", output: "export const synthetic = true;", metadata: {} });
   }
   const search = await plugin.tool.ctx_search.execute({ queries: ["probeanchor"], limit: 3 }, ctx);
   assert(text(search).includes("quartz-payload-9261"), "FTS tool must recall payload, not just echo query");
   const compact = { context: [] };
   await plugin["experimental.session.compacting"]({ sessionID: ctx.sessionID }, compact);
-  assert(compact.context.some((s) => s.includes("session_resume") && s.includes("synthetic.ts")),
-    "synthetic context state must survive replacement");
+  assert(compact.context.some((s) => s.includes("session_resume") && s.includes(marker)),
+    "compaction must include the cold-only marker");
   console.log("PROBE_OK");
   process.exit(0);
 } else {

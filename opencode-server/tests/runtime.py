@@ -25,7 +25,9 @@ TAG = "opencode_project_" + hashlib.sha256(("path:" + HOME).encode()).hexdigest(
 TOKEN = "ci-fixture-not-a-secret"  # Public fixture, not a credential.
 PLUGINS = ["context-mode@1.0.169", "opencode-mem@2.26.0"]
 TOOLS = {"memory", "ctx_execute", "ctx_batch_execute", "ctx_index", "ctx_search", "ctx_stats"}
-PREFIX = "opencode-runtime-ci-" + uuid.uuid4().hex
+RUN_ID = uuid.uuid4().hex
+PREFIX = "opencode-runtime-ci-" + RUN_ID
+COLD_MARKER = "ci-cold-" + RUN_ID
 VOLUME = PREFIX + "-home"
 CONTAINERS = [PREFIX + "-cold", PREFIX + "-warm"]
 CONFIG_VOLUMES = [PREFIX + "-config-cold", PREFIX + "-config-warm"]
@@ -127,7 +129,7 @@ def wait_json(container, port, route, accept, window=300):
 
 
 def probe(container, mode, timeout=120):
-    result = run(["exec", container, "node", "/probe/probe.mjs", mode], timeout=timeout)
+    result = run(["exec", container, "node", "/probe/probe.mjs", mode, COLD_MARKER], timeout=timeout)
     if mode in ("cache", "metadata"):
         return json.loads(result.stdout)
     if "PROBE_OK" not in result.stdout.splitlines():
@@ -172,6 +174,7 @@ def start(image, index, mounts):
          "--network=" + ("bridge" if index == 0 else "none"), *HARDEN,
          "--user=1000:1000", *ENV, *mounts, "-v", TESTS + ":/probe:ro",
          "-w", HOME, image, "web", "--hostname", "127.0.0.1", "--port", "4096"])
+    probe(name, "security")
     wait_json(name, 4096, "/config", config_present, window=420)
     return name
 
@@ -204,7 +207,7 @@ def recall(name, memory_id):
 def main():
     status = "FAIL"
     exit_code = 1
-    evidence = {}
+    evidence = {"context_host_invocation": "outstanding; registration only"}
     try:
         if len(sys.argv) != 2:
             raise Failure("exact locally built image argument required")
@@ -227,6 +230,7 @@ def main():
         evidence["runtime"] = json.loads(run([*helper, "metadata"]).stdout)
         cold = phase("cold startup and automatic pinned plugin installation")
         name = start(image, 0, mounts)
+        evidence["cold_security_checked"] = True
         elapsed("cold_config_seconds", cold)
         ready(name)
         elapsed("cold_plugin_ready_seconds", cold)
@@ -244,7 +248,7 @@ def main():
         first = phase("first local embedding recall")
         evidence["cold_similarity"] = recall(name, memory_id)
         elapsed("first_recall_seconds", first)
-        phase("context FTS5, native execution, and synthetic state capture")
+        phase("direct Node context FTS5, execution, and cold-only synthetic capture")
         probe(name, "context-cold")
         before = probe(name, "cache", timeout=180)
         evidence["cold_cache"] = before
@@ -256,6 +260,7 @@ def main():
         mounts = prepare(image, 1)
         warm = phase("warm replacement with no network")
         name = start(image, 1, mounts)
+        evidence["warm_security_checked"] = True
         elapsed("warm_config_seconds", warm)
         ready(name)
         elapsed("warm_plugin_ready_seconds", warm)
@@ -263,7 +268,9 @@ def main():
         evidence["warm_similarity"] = recall(name, memory_id)
         elapsed("warm_recall_seconds", first)
         elapsed("warm_to_recall_seconds", warm)
+        phase("direct Node context recall of exact cold-only event marker")
         probe(name, "context-warm")
+        evidence["context_cold_marker_recalled"] = COLD_MARKER
         after = probe(name, "cache", timeout=180)
         if before != after:
             raise Failure("plugin lock/manifest or model cache changed during offline replacement")
